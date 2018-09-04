@@ -1,0 +1,10 @@
+ # Generated Vivado project file
+/proj
+
+# Ignore all of the unecessary IP files, only the XCI files are needed to
+# regenerate the IP
+src/ip/*/**
+!src/ip/*/*.xci
+
+# Files used by Xilinx for bookkeeping
+.Xil/
