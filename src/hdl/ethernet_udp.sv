@@ -59,7 +59,7 @@ typedef struct packed {
     logic unsigned [7:0] time_to_live;
     logic unsigned [7:0] protocol;
     logic unsigned [15:0] header_checksum;
-    logic unsigned [31:0] source_ip;
+    logic unsigned [31:0] src_ip;
     logic unsigned [31:0] dest_ip;
 } IPHeader;
 
@@ -74,12 +74,12 @@ typedef struct packed {
 ///
 /// # Fields
 ///
-/// *   [source_port] is the number of the source port.
+/// *   [src_port] is the number of the source port.
 /// *   [dest_port] is the number of the destination port.
-/// *   [length] is the length in bytes
-/// *   [checksum]
+/// *   [length] is the length of the packet in bytes inclufing this header.
+/// *   [checksum] is the UDP checksum.
 typedef struct packed {
-    logic unsigned [15:0] source_port;
+    logic unsigned [15:0] src_port;
     logic unsigned [15:0] dest_port;
     logic unsigned [15:0] length;
     logic unsigned [15:0] checksum;
@@ -205,7 +205,7 @@ endinterface
 /// *   [reset] is the system reset signal.
 /// *   [data] is the bus of data to be transmitted over the port.
 /// *   [eth] contains the signals used to write to the Ethernet PHY.
-/// *   [info] is the source and destination data that is needed to transmit
+/// *   [ip_info] is the source and destination data that is needed to transmit
 ///     the packet.
 /// *   [send] is a rising edge active signal that starts sending the [data].
 /// *   [size] is an unsigned number that indicates the number of bytes of
@@ -224,7 +224,7 @@ module ethernet_udp_transmit #(
     // Ethernet
     input logic [8*DATA_WIDTH-1:0] data,
     EthernetPHY.fwd eth,
-    input IPInfo info,
+    input IPInfo ip_info,
     output logic ready,
     input logic send,
     input logic unsigned [8:0] size);
@@ -253,13 +253,86 @@ module ethernet_udp_transmit #(
     end
 
     // Rename some parameters to be more conveniently accessed
-    localparam int DW = DATA_WIDTH;
+    localparam int unsigned DW = DATA_WIDTH;
 
-    // TODO Make the IP header
+    // The number of bytes in the IP header.
+    localparam int unsigned IP_HEADER_BYTES = 20;
 
-    // TODO Construct the UDP header
+    // The number of bytes in the IP header.
+    localparam int unsigned UDP_HEADER_BYTES = 8;
+
+    // The total number of bytes in the IP packet.
+    localparam int unsigned IP_TOTAL_BYTES =
+        IP_HEADER_BYTES + UDP_HEADER_BYTES + DATA_WIDTH;
+
+    // The total number of bytes in the UDP packet.
+    localparam int unsigned UDP_TOTAL_BYTES = UDP_HEADER_BYTES + DATA_WIDTH;
+
+    // The IP version to use.
+    localparam int unsigned IP_VERSION = 4;
+
+    // The IP header length.
+    localparam int unsigned IP_IHL = IP_HEADER_BYTES / 4;
+
+    // The IP type of service. This requests high throughput and reliability.
+    localparam int unsigned IP_TOS = 8'h0C;
+
+    // The IP fragment identification.
+    localparam int unsigned IP_ID = 0;
+
+    // The IP flags.
+    localparam int unsigned IP_FLAGS = 0;
+
+    // The IP fragmentation offset.
+    localparam int unsigned IP_FRAG_OFFSET = 0;
+
+    // The IP time to live.
+    localparam int unsigned IP_TTL = 8'hFF;
+
+    // The IP next level protocol to use. This is the User Datagram Protocol.
+    localparam int unsigned IP_PROTOCOL = 8'h11;
+
+    // The IP and UDP headers to use.
+    IPHeader ip_header;
+    UDPHeader udp_header;
+
+    // Construct the IP header
+    always_ff @(posedge clk) begin
+        if (reset) begin
+            ip_header <= '0;
+        end else begin
+            ip_header.version         <= IP_VERSION;
+            ip_header.ihl             <= IP_IHL;
+            ip_header.type_of_service <= IP_TOS;
+            ip_header.total_length    <= IP_TOTAL_BYTES;
+            ip_header.identification  <= IP_ID;
+            ip_header.flags           <= IP_FLAGS;
+            ip_header.fragment_offset <= IP_FRAG_OFFSET;
+            ip_header.time_to_live    <= IP_TTL;
+            ip_header.protocol        <= IP_PROTOCOL;
+            ip_header.header_checksum <= '0; // TODO
+            ip_header.src_ip          <= ip_info.src_ip;
+            ip_header.dest_ip         <= ip_info.dest_ip;
+        end
+    end
+
+    // Construct the UDP header
+    always_ff @(posedge clk) begin
+        if (reset) begin
+            udp_header <= '0;
+        end else begin
+            udp_header.src_port  <= ip_info.src_port;
+            udp_header.dest_port <= ip_info.dest_port;
+            udp_header.length    <= UDP_TOTAL_BYTES;
+            udp_header.checksum  <= '0; // TODO
+        end
+    end
 
     // TODO Construct the data
+
+    // TODO Compute the IP header checksum
+
+    // TODO Compute the UDP header checksum
 
     // TODO Send the data to the Ethernet PHY
 
