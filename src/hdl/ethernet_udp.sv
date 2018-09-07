@@ -302,13 +302,13 @@ module ethernet_udp_transmit #(
                 packet.ip_header.fragment_offset <= IP_FRAG_OFFSET;
                 packet.ip_header.time_to_live    <= IP_TTL;
                 packet.ip_header.protocol        <= IP_PROTOCOL;
-                packet.ip_header.header_checksum <= '0; // TODO
+                packet.ip_header.header_checksum <= '0; // Computed later
                 packet.ip_header.src_ip          <= ip_info.src_ip;
                 packet.ip_header.dest_ip         <= ip_info.dest_ip;
                 // Construct the UDP header
                 packet.udp_header.dest_port <= ip_info.dest_port;
                 packet.udp_header.length    <= UDP_TOTAL_BYTES;
-                packet.udp_header.checksum  <= '0; // TODO
+                packet.udp_header.checksum  <= '0; // Computed later
                 // Add the data to the packet
                 packet.data <= data;
                 // Others
@@ -316,25 +316,36 @@ module ethernet_udp_transmit #(
                 state <= IP_CHECKSUM;
             end
             IP_CHECKSUM: begin
-                // TODO
-
+                // Compute the IP header checksum
+                packet.ip_header.header_checksum <= ~(
+                    packet.ip_header[8*20-1:8*18] +
+                    packet.ip_header[8*18-1:8*16] +
+                    packet.ip_header[8*16-1:8*14] +
+                    packet.ip_header[8*14-1:8*12] +
+                    packet.ip_header[8*12-1:8*10] +
+                    packet.ip_header[8*10-1:8* 8] +
+                    packet.ip_header[8* 8-1:8* 6] +
+                    packet.ip_header[8* 6-1:8* 4] +
+                    packet.ip_header[8* 4-1:8* 2] +
+                    packet.ip_header[8* 2-1:8* 0]);
                 // Others
                 state <= SEND;
             end
             SEND: begin
-                // TODO
+                // TODO Send the data while computing the UDP checksum
 
                 // Others
                 state <= WAIT;
             end
             WAIT: begin
-                // TODO
+                // TODO What an appropriate amount of time for the line to
+                // settle
 
                 // Others
                 state <= DONE;
             end
             DONE: begin
-                // TODO
+                // TODO Can this be merged with the WAIT state?
 
                 // Others
                 ready <= 1;
@@ -343,11 +354,6 @@ module ethernet_udp_transmit #(
             endcase
         end
     end
-
-    // TODO State machine:
-    //      Latch
-    //      Compute IP header checksum
-    //      Send stuff out while zipping along data for the UDP checksum
 
 endmodule
 
