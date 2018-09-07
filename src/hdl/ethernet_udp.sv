@@ -15,6 +15,23 @@
 // is 0. The code uses the format where the LSBs are 0, but the comments which
 // reference RFCs use the MSB as 0 to be consistent with them.
 
+/// This is the header of an Ethernet frame.
+///
+/// # Fields
+///
+/// *   [preamble] is a group of alternating 0's and 1's.
+/// *   [sfd] marks the end of the preamble.
+/// *   [dest_mac] is the destination MAC address.
+/// *   [src_mac] is the source MAC address.
+/// *   [ether_type] indicates the protocol of the packet being sent.
+typedef struct packed {
+    logic unsigned [55:0] preamble;
+    logic unsigned [7:0] sfd;
+    logic unsigned [47:0] dest_mac;
+    logic unsigned [47:0] src_mac;
+    logic unsigned [15:0] ether_type;
+} EthernetHeader;
+
 /// According to RFC 791, an IP header has the following format
 ///
 ///  0                   1                   2                   3
@@ -196,7 +213,7 @@ module ethernet_udp_transmit #(
     input logic clk,
     input logic reset,
     // Ethernet
-    input logic [8*DATA_BYTES-1:0] data,
+    input logic unsigned [8*DATA_BYTES-1:0] data,
     EthernetPHY.fwd eth,
     input IPInfo ip_info,
     output logic ready,
@@ -219,6 +236,14 @@ module ethernet_udp_transmit #(
 
     // The total number of nibbles in the data.
     localparam int unsigned DATA_NIBBLES = 2 * DATA_BYTES;
+
+    // The bytes used in the preamble and the SFD.
+    localparam int unsigned PREAMBLE_BYTE = 8'b10101010;
+    localparam int unsigned SFD_BYTE      = 8'b10101011;
+
+    // The Ethernet type for the Ethernet header. This value indicates that
+    // IPv4 is used.
+    localparam int unsigned ETHER_TYPE = 16'h0800;
 
     // The number of bytes in the IP header.
     localparam int unsigned IP_HEADER_BYTES = 20;
@@ -295,11 +320,12 @@ module ethernet_udp_transmit #(
     } state;
 
     // This structure represents a packet to be sent.
-    // TODO Move the IPHeader and UDPHeader into this anonymous struct
     struct packed {
+        EthernetHeader eth_header;
         IPHeader ip_header;
         UDPHeader udp_header;
         logic [8*DATA_BYTES-1:0] data;
+        logic [15:0] crc;
     } packet;
 
     // Indicates the index of the current nibble to send.
@@ -319,7 +345,21 @@ module ethernet_udp_transmit #(
             state      <= READY;
         end else begin
             case (state)
+            // Latch the data
             READY: if (!send_prev && send) begin
+                // Set the preamble and SFD.
+                packet.eth_header.preamble[7*8-1:6*8] <= PREAMBLE_BYTE;
+                packet.eth_header.preamble[6*8-1:5*8] <= PREAMBLE_BYTE;
+                packet.eth_header.preamble[5*8-1:4*8] <= PREAMBLE_BYTE;
+                packet.eth_header.preamble[4*8-1:3*8] <= PREAMBLE_BYTE;
+                packet.eth_header.preamble[3*8-1:2*8] <= PREAMBLE_BYTE;
+                packet.eth_header.preamble[2*8-1:1*8] <= PREAMBLE_BYTE;
+                packet.eth_header.preamble[1*8-1:0*8] <= PREAMBLE_BYTE;
+                packet.eth_header.sfd                 <= SFD_BYTE;
+                // Construct the Ethernet header
+                packet.eth_header.dest_mac   <= ip_info.dest_mac;
+                packet.eth_header.src_mac    <= ip_info.src_mac;
+                packet.eth_header.ether_type <= ETHER_TYPE;
                 // Construct the IP header
                 packet.ip_header.version         <= IP_VERSION;
                 packet.ip_header.ihl             <= IP_IHL;
@@ -336,14 +376,17 @@ module ethernet_udp_transmit #(
                 // Construct the UDP header
                 packet.udp_header.dest_port <= ip_info.dest_port;
                 packet.udp_header.length    <= UDP_TOTAL_BYTES;
-                packet.udp_header.checksum  <= '0; // Computed later
+                packet.udp_header.checksum  <= '0; // Left as 0
                 // Add the data to the packet
                 packet.data <= data;
+                // Zero the CRC so it can be computed later
+                packet.crc <= '0;
                 // Others
                 nibble <= '0;
                 ready  <= 0;
                 state  <= CHECKSUM;
             end
+            // Compute some checksums
             CHECKSUM: begin
                 // Compute the IP header checksum
                 packet.ip_header.header_checksum <= ~(
@@ -357,15 +400,15 @@ module ethernet_udp_transmit #(
                     packet.ip_header[8* 6-1:8* 4] +
                     packet.ip_header[8* 4-1:8* 2] +
                     packet.ip_header[8* 2-1:8* 0]);
-                // Compute part of the UDP checksum
-                // TODO UDP Checksum
                 // Others
                 state <= SEND;
             end
+            // Send the data to the PHY
             SEND: if (phy_clk) begin
+                // TODO Decrement the nibble
                 if (nibble < IP_TOTAL_NIBBLES) begin
                     if (nibble < DATA_NIBBLES && nibble % 4 == 0) begin
-                        // TODO Contribute 16 data bits to the UDP checksum
+                        // TODO Contribute 16 data bits to the CRC
                     end
                     nibble <= nibble + 1;
                     // TODO Write nibble to PHY
@@ -373,6 +416,7 @@ module ethernet_udp_transmit #(
                     state <= WAIT;
                 end
             end
+            // Wait the appropriate time for the Ethernet interframe gap
             WAIT: if (phy_clk) begin
                 if (gap_nibble < GAP_NIBBLES) begin
                     gap_nibble <= gap_nibble + 1;
