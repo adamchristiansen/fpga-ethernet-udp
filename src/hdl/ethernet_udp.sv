@@ -217,9 +217,6 @@ module ethernet_udp_transmit #(
         end
     end
 
-    // Rename some parameters to be more conveniently accessed
-    localparam int unsigned DW = DATA_WIDTH;
-
     // The number of bytes in the IP header.
     localparam int unsigned IP_HEADER_BYTES = 20;
 
@@ -257,49 +254,100 @@ module ethernet_udp_transmit #(
     // The IP next level protocol to use. This is the User Datagram Protocol.
     localparam int unsigned IP_PROTOCOL = 8'h11;
 
-    // The IP and UDP headers to use.
-    IPHeader ip_header;
-    UDPHeader udp_header;
-
-    // Construct the IP header
+    // Track the previous send value for edge detection
+    logic send_prev;
     always_ff @(posedge clk) begin
         if (reset) begin
-            ip_header <= '0;
+            // This is set to 1 to prevent accidentally detecting a rising
+            // edge.
+            send_prev <= 1;
         end else begin
-            ip_header.version         <= IP_VERSION;
-            ip_header.ihl             <= IP_IHL;
-            ip_header.type_of_service <= IP_TOS;
-            ip_header.total_length    <= IP_TOTAL_BYTES;
-            ip_header.identification  <= IP_ID;
-            ip_header.flags           <= IP_FLAGS;
-            ip_header.fragment_offset <= IP_FRAG_OFFSET;
-            ip_header.time_to_live    <= IP_TTL;
-            ip_header.protocol        <= IP_PROTOCOL;
-            ip_header.header_checksum <= '0; // TODO
-            ip_header.src_ip          <= ip_info.src_ip;
-            ip_header.dest_ip         <= ip_info.dest_ip;
+            send_prev <= send;
         end
     end
 
-    // Construct the UDP header
+    // This enum is used to track the progress of a state machine that writes
+    // the data to the PHY.
+    enum {
+        READY,
+        IP_CHECKSUM,
+        SEND,
+        WAIT,
+        DONE
+    } state;
+
+    // This structure represents a packet to be sent.
+    // TODO Move the IPHeader and UDPHeader into this anonymous struct
+    struct packed {
+        IPHeader ip_header;
+        UDPHeader udp_header;
+        logic [8*DATA_WIDTH-1:0] data;
+    } packet;
+
     always_ff @(posedge clk) begin
         if (reset) begin
-            udp_header <= '0;
+            packet <= '0;
+            ready <= 1;
+            state <= READY;
         end else begin
-            udp_header.src_port  <= ip_info.src_port;
-            udp_header.dest_port <= ip_info.dest_port;
-            udp_header.length    <= UDP_TOTAL_BYTES;
-            udp_header.checksum  <= '0; // TODO
+            case (state)
+            READY: if (!send_prev && send) begin
+                // Construct the IP header
+                packet.ip_header.version         <= IP_VERSION;
+                packet.ip_header.ihl             <= IP_IHL;
+                packet.ip_header.type_of_service <= IP_TOS;
+                packet.ip_header.total_length    <= IP_TOTAL_BYTES;
+                packet.ip_header.identification  <= IP_ID;
+                packet.ip_header.flags           <= IP_FLAGS;
+                packet.ip_header.fragment_offset <= IP_FRAG_OFFSET;
+                packet.ip_header.time_to_live    <= IP_TTL;
+                packet.ip_header.protocol        <= IP_PROTOCOL;
+                packet.ip_header.header_checksum <= '0; // TODO
+                packet.ip_header.src_ip          <= ip_info.src_ip;
+                packet.ip_header.dest_ip         <= ip_info.dest_ip;
+                // Construct the UDP header
+                packet.udp_header.dest_port <= ip_info.dest_port;
+                packet.udp_header.length    <= UDP_TOTAL_BYTES;
+                packet.udp_header.checksum  <= '0; // TODO
+                // Add the data to the packet
+                packet.data <= data;
+                // Others
+                ready <= 0;
+                state <= IP_CHECKSUM;
+            end
+            IP_CHECKSUM: begin
+                // TODO
+
+                // Others
+                state <= SEND;
+            end
+            SEND: begin
+                // TODO
+
+                // Others
+                state <= WAIT;
+            end
+            WAIT: begin
+                // TODO
+
+                // Others
+                state <= DONE;
+            end
+            DONE: begin
+                // TODO
+
+                // Others
+                ready <= 1;
+                state <= READY;
+            end
+            endcase
         end
     end
 
-    // TODO Construct the data
-
-    // TODO Compute the IP header checksum
-
-    // TODO Compute the UDP header checksum
-
-    // TODO Send the data to the Ethernet PHY
+    // TODO State machine:
+    //      Latch
+    //      Compute IP header checksum
+    //      Send stuff out while zipping along data for the UDP checksum
 
 endmodule
 
