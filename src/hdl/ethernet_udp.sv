@@ -151,16 +151,7 @@ interface EthernetPHY;
 endinterface
 
 /// This module implements a transmitter for an Ethernet port. This is used to
-/// send variable sized UDP packets using IPv4.
-///
-/// Since UDP is inherently unsafe (there are plenty of reasons a packet can
-/// get dropped), a portion of each packet's payload is (optionally) used as a
-/// counter by setting the [USE_COUNTER] parameter on the module. This causes
-/// the first 4 bytes of the packet to contain an integer giving the packet a
-/// sequence number. Out of order packets can then be received and
-/// reconstructed, and dropped packets can be detected. When the [USE_COUNTER]
-/// is disabled, the first 4 bytes of the packet are instead used as part of
-/// the data, allowing 4 more bytes to be transmitted.
+/// send UDP packets using IPv4.
 ///
 /// The [DATA_WIDTH] parameter describes the maximum width (in bytes) that the
 /// module should be prepared to transmit through the [data] port. Here is a
@@ -172,25 +163,10 @@ endinterface
 ///     bytes.
 ///
 /// These specifications imply that the safest maximum size of a UDP payload is
-/// 576 - 60 - 8 = 508 bytes. This means that the maximum data size that can
-/// safely be transmitted is 508 is [USE_COUNTER] is disabled, and 504 if
-/// [USE_COUNTER] is enabled.
-///
-/// The [size] signal is optional, but gives finer control over what is sent.
-/// When the [send] signal rises, both [size] and [data] are latched. There are
-/// two cases that can happen here.
-///
-/// 1.  When [size] = 0 or [size] > DATA_WIDTH, the entire [data] register is
-///     sent.
-/// 2.  When 0 < [size] <= [DATA_WIDTH], the lower [size] bytes in ther [data]
-///     register are sent and the rest are ignored.
+/// 576 - 60 - 8 = 508 bytes.
 ///
 /// # Parameters
 ///
-/// *   [USE_COUNTER] indicates whether a counter should be embedded in the
-///     packets to label their order. A value of 0 disables the counter and a
-///     value of 1 enables it. All other values are invalid.
-///     positive, that number of bytes is used for the counter.
 /// *   [DATA_WIDTH] is the width in bytes to be transmitted in the payload of
 ///     each UDP packet.
 /// *   [DIVIDER] is the value of a clock divider that is used to generate a
@@ -208,14 +184,12 @@ endinterface
 /// *   [ip_info] is the source and destination data that is needed to transmit
 ///     the packet.
 /// *   [send] is a rising edge active signal that starts sending the [data].
-/// *   [size] is an unsigned number that indicates the number of bytes of
 /// *   [data] to be sent in the current packet. Set this to 0 to always send
 ///     the entire [data] register.
 /// *   [ready] indicates that the module is ready to accept a [send] signal to
 ///     transmit more data. This is held high while ready and falls when the
 /// *   [send] signal rises.
 module ethernet_udp_transmit #(
-    parameter int USE_COUNTER = -1,
     parameter int DATA_WIDTH = 0,
     parameter int DIVIDER = 0) (
     // Standard
@@ -226,25 +200,16 @@ module ethernet_udp_transmit #(
     EthernetPHY.fwd eth,
     input IPInfo ip_info,
     output logic ready,
-    input logic send,
-    input logic unsigned [8:0] size);
+    input logic send);
 
     // Assert that the parameters are appropriate
     initial begin
-        // Check that the USE_COUNTER is set appropriately
-        if (USE_COUNTER != 0 && USE_COUNTER != 1) begin
-            $error("The USE_COUNTER must be set to 0 or 1");
-        end
         // Check that the DATA_WIDTH is set appropriately
         if (DATA_WIDTH <= 0) begin
             $error("The DATA_WIDTH must be set to a positive number.");
         end
-        if (USE_COUNTER == 1 && DATA_WIDTH > 504) begin
-            $error("The DATA_WIDTH must be less than or equal to 504 when "
-                + "USE_COUNTER is set.");
-        end else if (DATA_WIDTH > 508) begin
-            $error("The DATA_WIDTH must be less than or equal to 508 when "
-                + "USE_COUNTER is not set");
+        if (DATA_WIDTH > 508) begin
+            $error("The DATA_WIDTH must be less than or equal to 508.");
         end
         // Check that the clock divider is set appropriately
         if (DIVIDER < 2) begin
