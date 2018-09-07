@@ -92,7 +92,7 @@ module main(
         // Ethernet
         .data(data),
         .eth(eth),
-        .info(ip_info),
+        .ip_info(ip_info),
         .ready(led[0]),
         .send(send_eth),
         .size(0)
