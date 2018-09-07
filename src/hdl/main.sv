@@ -62,7 +62,7 @@ module main(
     assign eth.tx_d    = eth_tx_d;
 
     // The width of the data to send
-    localparam int DW = 8;
+    localparam int DATA_BYTES = 8;
 
     // The data to send over Ethernet
     logic [63:0] data;
@@ -84,7 +84,7 @@ module main(
     assign ip_info.dest_mac  = '0;
     assign ip_info.dest_port = '0;
 
-    ethernet_udp_transmit #(.DATA_WIDTH(DW), .DIVIDER(4))
+    ethernet_udp_transmit #(.DATA_BYTES(DATA_BYTES), .DIVIDER(4))
     ethernet_udp_transmit(
         // Standard
         .clk(clk),

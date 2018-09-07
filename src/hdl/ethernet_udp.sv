@@ -153,7 +153,7 @@ endinterface
 /// This module implements a transmitter for an Ethernet port. This is used to
 /// send UDP packets using IPv4.
 ///
-/// The [DATA_WIDTH] parameter describes the maximum width (in bytes) that the
+/// The [DATA_BYTES] parameter describes the maximum width (in bytes) that the
 /// module should be prepared to transmit through the [data] port. Here is a
 /// summary of the most important information sourced from RFCs.
 ///
@@ -167,7 +167,7 @@ endinterface
 ///
 /// # Parameters
 ///
-/// *   [DATA_WIDTH] is the width in bytes to be transmitted in the payload of
+/// *   [DATA_BYTES] is the width in bytes to be transmitted in the payload of
 ///     each UDP packet.
 /// *   [DIVIDER] is the value of a clock divider that is used to generate a
 ///     new clock from the system clock. The new clock is used to write to the
@@ -190,13 +190,13 @@ endinterface
 ///     transmit more data. This is held high while ready and falls when the
 /// *   [send] signal rises.
 module ethernet_udp_transmit #(
-    parameter int DATA_WIDTH = 0,
+    parameter int DATA_BYTES = 0,
     parameter int DIVIDER = 0) (
     // Standard
     input logic clk,
     input logic reset,
     // Ethernet
-    input logic [8*DATA_WIDTH-1:0] data,
+    input logic [8*DATA_BYTES-1:0] data,
     EthernetPHY.fwd eth,
     input IPInfo ip_info,
     output logic ready,
@@ -204,18 +204,21 @@ module ethernet_udp_transmit #(
 
     // Assert that the parameters are appropriate
     initial begin
-        // Check that the DATA_WIDTH is set appropriately
-        if (DATA_WIDTH <= 0) begin
-            $error("The DATA_WIDTH must be set to a positive number.");
+        // Check that the DATA_BYTES is set appropriately
+        if (DATA_BYTES <= 0) begin
+            $error("The DATA_BYTES must be set to a positive number.");
         end
-        if (DATA_WIDTH > 508) begin
-            $error("The DATA_WIDTH must be less than or equal to 508.");
+        if (DATA_BYTES > 508) begin
+            $error("The DATA_BYTES must be less than or equal to 508.");
         end
         // Check that the clock divider is set appropriately
         if (DIVIDER < 2) begin
             $error("The DIVIDER must be set to at least 2.");
         end
     end
+
+    // The total number of nibbles in the data.
+    localparam int unsigned DATA_NIBBLES = 2 * DATA_BYTES;
 
     // The number of bytes in the IP header.
     localparam int unsigned IP_HEADER_BYTES = 20;
@@ -225,10 +228,13 @@ module ethernet_udp_transmit #(
 
     // The total number of bytes in the IP packet.
     localparam int unsigned IP_TOTAL_BYTES =
-        IP_HEADER_BYTES + UDP_HEADER_BYTES + DATA_WIDTH;
+        IP_HEADER_BYTES + UDP_HEADER_BYTES + DATA_BYTES;
+
+    // The total number of nibbles in the IP packet.
+    localparam int unsigned IP_TOTAL_NIBBLES = 2 * IP_TOTAL_BYTES;
 
     // The total number of bytes in the UDP packet.
-    localparam int unsigned UDP_TOTAL_BYTES = UDP_HEADER_BYTES + DATA_WIDTH;
+    localparam int unsigned UDP_TOTAL_BYTES = UDP_HEADER_BYTES + DATA_BYTES;
 
     // The IP version to use.
     localparam int unsigned IP_VERSION = 4;
@@ -254,6 +260,19 @@ module ethernet_udp_transmit #(
     // The IP next level protocol to use. This is the User Datagram Protocol.
     localparam int unsigned IP_PROTOCOL = 8'h11;
 
+    // The number of write cycles to wait after sending after writing data to
+    // the PHY. This must be at least 12 bytes worth of time.
+    localparam int unsigned GAP_NIBBLES = 24;
+
+    // Generate the clock signal to transmit on.
+    logic phy_clk;
+    phy_clk_gen #(.DIVIDER(DIVIDER)) phy_clk_gen_0(
+        .clk(clk),
+        .reset(clk),
+        .clear(0),
+        .phy_clk(phy_clk)
+    );
+
     // Track the previous send value for edge detection
     logic send_prev;
     always_ff @(posedge clk) begin
@@ -270,10 +289,9 @@ module ethernet_udp_transmit #(
     // the data to the PHY.
     enum {
         READY,
-        IP_CHECKSUM,
+        CHECKSUM,
         SEND,
-        WAIT,
-        DONE
+        WAIT
     } state;
 
     // This structure represents a packet to be sent.
@@ -281,14 +299,24 @@ module ethernet_udp_transmit #(
     struct packed {
         IPHeader ip_header;
         UDPHeader udp_header;
-        logic [8*DATA_WIDTH-1:0] data;
+        logic [8*DATA_BYTES-1:0] data;
     } packet;
 
+    // Indicates the index of the current nibble to send.
+    int unsigned nibble;
+
+    // A counter to use to wait the appropriate number of cycles after sending
+    // the packet.
+    int unsigned gap_nibble;
+
+    // Run the state machine that sends that data to the PHY.
     always_ff @(posedge clk) begin
         if (reset) begin
-            packet <= '0;
-            ready <= 1;
-            state <= READY;
+            nibble     <= '0;
+            gap_nibble <= '0;
+            packet     <= '0;
+            ready      <= 1;
+            state      <= READY;
         end else begin
             case (state)
             READY: if (!send_prev && send) begin
@@ -312,10 +340,11 @@ module ethernet_udp_transmit #(
                 // Add the data to the packet
                 packet.data <= data;
                 // Others
-                ready <= 0;
-                state <= IP_CHECKSUM;
+                nibble <= '0;
+                ready  <= 0;
+                state  <= CHECKSUM;
             end
-            IP_CHECKSUM: begin
+            CHECKSUM: begin
                 // Compute the IP header checksum
                 packet.ip_header.header_checksum <= ~(
                     packet.ip_header[8*20-1:8*18] +
@@ -328,28 +357,32 @@ module ethernet_udp_transmit #(
                     packet.ip_header[8* 6-1:8* 4] +
                     packet.ip_header[8* 4-1:8* 2] +
                     packet.ip_header[8* 2-1:8* 0]);
+                // Compute part of the UDP checksum
+                // TODO UDP Checksum
                 // Others
                 state <= SEND;
             end
-            SEND: begin
-                // TODO Send the data while computing the UDP checksum
-
-                // Others
-                state <= WAIT;
+            SEND: if (phy_clk) begin
+                if (nibble < IP_TOTAL_NIBBLES) begin
+                    if (nibble < DATA_NIBBLES && nibble % 4 == 0) begin
+                        // TODO Contribute 16 data bits to the UDP checksum
+                    end
+                    nibble <= nibble + 1;
+                    // TODO Write nibble to PHY
+                end else begin
+                    state <= WAIT;
+                end
             end
-            WAIT: begin
-                // TODO What an appropriate amount of time for the line to
-                // settle
-
-                // Others
-                state <= DONE;
-            end
-            DONE: begin
-                // TODO Can this be merged with the WAIT state?
-
-                // Others
-                ready <= 1;
-                state <= READY;
+            WAIT: if (phy_clk) begin
+                if (gap_nibble < GAP_NIBBLES) begin
+                    gap_nibble <= gap_nibble + 1;
+                end else begin
+                    // Reset the count for the next time
+                    gap_nibble <= '0;
+                    // Others
+                    ready <= 1;
+                    state <= READY;
+                end
             end
             endcase
         end
@@ -358,7 +391,8 @@ module ethernet_udp_transmit #(
 endmodule
 
 /// This module is used to generate a clock pulse used to send out the Ethernet
-/// data to the PHY.
+/// data to the PHY. The resulting clock is only held high for 1 clock cycle
+/// of the reference clock.
 ///
 /// # Parameters
 ///
@@ -372,13 +406,13 @@ endmodule
 /// *   [clear] is a synchronous clear signal that resets the output clocks
 ///     while it is asserted. The clocks will begin counting when this is
 ///     deasserted.
-/// *   [clk_gen] is the generated UDP clock.
-module upd_clock_generator #(
+/// *   [phy_clk] is the generated UDP clock.
+module phy_clk_gen #(
     parameter int DIVIDER = 0) (
     input logic clk,
     input logic reset,
     input logic clear,
-    output logic clk_gen);
+    output logic phy_clk);
 
     // Assert that the parameters are appropriate
     initial begin
@@ -403,10 +437,10 @@ module upd_clock_generator #(
     // Update the generated clock.
     always_ff @(posedge clk) begin
         if (reset || clear || counter >= COUNTER_MAX) begin
-            clk_gen <= 0;
+            phy_clk <= 0;
             counter <= '0;
         end else begin
-            clk_gen <= counter == COUNTER_ONE;
+            phy_clk <= counter == COUNTER_ONE;
             counter <= counter + 1;
         end
     end
