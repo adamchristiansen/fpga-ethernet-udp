@@ -84,7 +84,7 @@ module main(
     assign ip_info.dest_mac  = '0;
     assign ip_info.dest_port = '0;
 
-    ethernet_udp_transmit #(.USE_COUNTER(0), .DATA_WIDTH(DW), .DIVIDER(4))
+    ethernet_udp_transmit #(.DATA_WIDTH(DW), .DIVIDER(4))
     ethernet_udp_transmit(
         // Standard
         .clk(clk),
@@ -94,8 +94,7 @@ module main(
         .eth(eth),
         .ip_info(ip_info),
         .ready(led[0]),
-        .send(send_eth),
-        .size(0)
+        .send(send_eth)
     );
 
     // The rest of the LEDs are unused
