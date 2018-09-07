@@ -4,9 +4,10 @@
 // of 8-bits. This is because the term _bytes_ is not actually well defined.
 // There is no reason that a byte must be 8 bits. A byte is the smallest
 // addressable unit in a system, which historically and practically has been
-// designated 8 bits. There is not reason that a byte couldn't be 16, 32, 5, 19,
-// or any other number of bits. However, in the implementation of this module,
-// it will be assumed that octects and bytes are equivalent and interchangeable.
+// designated 8 bits. There is not reason that a byte couldn't be 16, 32, 5,
+// 19, or any other number of bits. However, in the implementation of this
+// module, it will be assumed that octects and bytes are equivalent and
+// interchangeable.
 
 // NOTE: In the specification of the Internet protocols (RFCs), the terminalogy
 // is a bit confusing. The RFCs use big-endian format, but the bit labelling is
@@ -108,8 +109,8 @@ typedef struct packed {
 ///
 /// # Ports
 ///
-/// *   [eth_crs] is the carrier sense signal. It is driven high when the medium
-///     is busy.
+/// *   [eth_crs] is the carrier sense signal. It is driven high when the
+///     medium is busy.
 /// *   [eth_mdc] is the clock for communicating over MDIO, with a maximum rate
 ///     of 25MHz.
 /// *   [eth_mdio] is a bidrectional data signal for instructions.
@@ -117,9 +118,9 @@ typedef struct packed {
 ///     25MHz clock source.
 /// *   [eth_rstn] is an active low reset. This signal must be asserted for at
 ///     least 1 µs for a reset event to get triggered.
-/// *   [eth_tx_clk] is the clock to transmit data on. This will have two values
-///     depending on the mode. In the 10 Mb/s mode, this will be 2.5 MHz. In the
-///     100 Mb/s mode, this will be 25 MHz.
+/// *   [eth_tx_clk] is the clock to transmit data on. This will have two
+///     values depending on the mode. In the 10 Mb/s mode, this will be
+///     2.5 MHz.In the 100 Mb/s mode, this will be 25 MHz.
 /// *   [eth_tx_en] is the transmit enable. This is an active high indicator
 ///     that the value on [eth_rx_d] is valid.
 /// *   [eth_tx_d] is the data to transmit.
@@ -152,14 +153,14 @@ endinterface
 /// This module implements a transmitter for an Ethernet port. This is used to
 /// send variable sized UDP packets using IPv4.
 ///
-/// Since UDP is inherently unsafe (there are plenty of reasons a packet can get
-/// dropped), a portion of each packet's payload is (optionally) used as a
+/// Since UDP is inherently unsafe (there are plenty of reasons a packet can
+/// get dropped), a portion of each packet's payload is (optionally) used as a
 /// counter by setting the [USE_COUNTER] parameter on the module. This causes
 /// the first 4 bytes of the packet to contain an integer giving the packet a
 /// sequence number. Out of order packets can then be received and
 /// reconstructed, and dropped packets can be detected. When the [USE_COUNTER]
-/// is disabled, the first 4 bytes of the packet are instead used as part of the
-/// data, allowing 4 more bytes to be transmitted.
+/// is disabled, the first 4 bytes of the packet are instead used as part of
+/// the data, allowing 4 more bytes to be transmitted.
 ///
 /// The [DATA_WIDTH] parameter describes the maximum width (in bytes) that the
 /// module should be prepared to transmit through the [data] port. Here is a
@@ -192,8 +193,8 @@ endinterface
 ///     positive, that number of bytes is used for the counter.
 /// *   [DATA_WIDTH] is the width in bytes to be transmitted in the payload of
 ///     each UDP packet.
-/// *   [DIVIDER] is the value of a clock divider that is used to generate a new
-///     clock from the system clock. The new clock is used to write to the
+/// *   [DIVIDER] is the value of a clock divider that is used to generate a
+///     new clock from the system clock. The new clock is used to write to the
 ///     Ethernet PHY. The divider must be large enough so that the produced
 ///     clock is no faster than 25MHz (which is the max speed supported by the
 ///     10/100 PHY).

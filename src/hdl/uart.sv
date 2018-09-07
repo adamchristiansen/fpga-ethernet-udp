@@ -10,11 +10,11 @@
 ///
 /// *   [clk] is the system clock and the reference clock for the division.
 /// *   [reset] is the system reset.
-/// *   [data] is the byte to transmit. This is latched and sent when [ready] is
-///     high and [send] rises.
+/// *   [data] is the byte to transmit. This is latched and sent when [ready]
+///     is high and [send] rises.
 /// *   [send] is rising edge active to latch and send the [data].
-/// *   [ready] indicates that the module is ready to receive a [send] signal to
-///     latch and and send the [data]. This is held until the next [send]
+/// *   [ready] indicates that the module is ready to receive a [send] signal
+///     to latch and and send the [data]. This is held until the next [send]
 ///     signal.
 /// *   [tx] is the serial line to transmit over.
 module uart_transmit #(
@@ -134,8 +134,8 @@ endmodule
 /// *   [data] is the byte that was received. This is updated when [ready]
 ///     rises and it valid until [ready] is driven low.
 /// *   [ready] indicates that the module has received a byte and exposed it on
-///     the [data] port. When [ready] rises the data is ready. This is held high
-///     for 1 clock cycle.
+///     the [data] port. When [ready] rises the data is ready. This is held
+///     high for 1 clock cycle.
 module uart_receive #(
     parameter int unsigned DIVIDER = 0) (
     input logic clk,
@@ -220,8 +220,8 @@ module uart_receive #(
                 `ADVANCE_STATE(READ_8, received_byte[7], READ_9)
                 READ_9: if (baud_clk) begin
                     if (rx) begin
-                        // The byte is only exposed at the output if the [rx] is
-                        // high at the end.
+                        // The byte is only exposed at the output if the [rx]
+                        // is high at the end.
                         data  <= received_byte;
                         ready <= 1;
                     end
@@ -238,29 +238,30 @@ endmodule
 /// This module is used to generate a baudrate clock off of a base clock to
 /// transmit over serial. The phase of this clock is related to the time that a
 /// reset or clear event occurs. This creates a clock which starts low, and is
-/// only held high for 1 input clock cycle, and then is low for the remainder of
-/// the baud clock period.
+/// only held high for 1 input clock cycle, and then is low for the remainder
+/// of the baud clock period.
 ///
 ///                   One baud clock period
 ///                       (DIVIDER = 6)
 ///                 |----------------------|
 ///                   _   _   _   _   _   _   _   _   _   _   _   _   _   _   _
-///     clk         _| |_| |_| |_| |_| |_| |_| |_| |_| |_| |_| |_| |_| |_| |_| |
+///     clk         _| |_| |_| |_| |_| |_| |_| |_| |_| |_| |_| |_| |_| |_| |_|
 ///                   _                       _                        _
-///     baud_clk_tx _| |_____________________| |______________________| |_______
+///     baud_clk_tx _| |_____________________| |______________________| |______
 ///                           _                       _                       _
-///     baud_clk_rx _________| |_____________________| |_____________________| |
+///     baud_clk_rx _________| |_____________________| |_____________________|
 ///                 ^
 ///                 This point is either the end of a reset event ([reset]
 ///                 falls) or the start of a clear event ([clear] rises). This
 ///                 is the time that the clock starts. The 1 cycle wide pulses
 ///                 therefore occur in the middle of the clock period.
 ///
-/// There are two advantages to having clocks that follows these specifications.
+/// There are two advantages to having clocks that follows these
+/// specifications.
 ///
 /// 1.  An edge detector is not needed, and logic can simply run when these
-///     clocks go high, since they are only high for one cycle of the generating
-///     clock.
+///     clocks go high, since they are only high for one cycle of the
+///     generating clock.
 /// 2.  For the [baud_clk_tx], the pulse occurs at the beginning of the clock
 ///     period, so it is ideal for transmitting since it has 0 phase delay that
 ///     needs to be waited for after the clear event.
