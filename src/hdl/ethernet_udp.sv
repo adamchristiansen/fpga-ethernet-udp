@@ -350,6 +350,7 @@ module ethernet_udp_transmit #(
         localparam int unsigned POLYNOMIAL = 32'h04C11DB7;
         for (int unsigned i = 0; i < 2 ** FCS_STEP; i++) begin
             int unsigned r = i;
+            // Note that j is unused and is simply a loop counter
             for (int j = 0; j < FCS_STEP; j++) begin
                 r = (r & 1) ? ((r >> 1) ^ POLYNOMIAL) : (r >> 1);
             end
@@ -424,10 +425,8 @@ module ethernet_udp_transmit #(
             // Send the preamble and SFD to the PHY
             SEND_PREAMBLE_SFD: begin
                 if (i < PREAMBLE_SFD_NIBBLES) begin
-                    // TODO Write this data to the ports
-                    // (i < PREANBLE_SFD_NIBBLES - 1)
-                    //    ? 4'b1010
-                    //    : 4'b1011;
+                    eth.tx_d <= (i < PREAMBLE_SFD_NIBBLES - 1) ?
+                        4'b1010 : 4'b1011;
                     i <= i + 1;
                 end else begin
                     i     <= FRAME_NIBBLES - 1;
@@ -458,9 +457,9 @@ module ethernet_udp_transmit #(
                         frame.fcs <= (frame.fcs >> FCS_STEP) &
                             CRC_TABLE[(frame.fcs ^ i) & (2 ** FCS_STEP - 1)];
                     end
-                    i <= i - 1;
+                    i        <= i - 1;
+                    eth.tx_d <= nibble;
                     // TODO 1's complement the CRC
-                    // TODO Write nibble to PHY
                 end else begin
                     i     <= '0;
                     state <= WAIT;
