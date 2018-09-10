@@ -331,6 +331,38 @@ module ethernet_udp_transmit #(
         WAIT
     } state;
 
+    // The number of bits to contribute to the FCS on each round.
+    localparam int unsigned FCS_STEP = 4;
+
+    // The type of the CRC table to generate.
+    typedef int unsigned CRCTable [2**FCS_STEP-1:0];
+
+    // Generate a CRC table with 16 entrie. This can then be applied in rounds
+    // with a data size FCS_STEP.
+    //
+    // This is a precomputed table of the CRC values with round sizes of width
+    // FCS_STEP bits. These values are applied to a running CRC value with
+    //
+    // ```
+    // crc <- (crc >> FCS_WIDTH) & CRC_TABLE[(crc & step) (2 ** FCS_STEP - 1)]
+    // ```
+    //
+    // where `crc` is the running CRC and `step` is the data to be added to it.
+    function CRCTable crc_table();
+        // TODO Is this the right polynomial?
+        localparam int unsigned POLYNOMIAL = 32'h04C11DB7;
+        for (int unsigned i = 0; i < 2 ** FCS_STEP; i++) begin
+            int unsigned r = i;
+            for (int j = 0; j < FCS_STEP; j++) begin
+                r = (r & 1) ? ((r >> 1) ^ POLYNOMIAL) : (r >> 1);
+            end
+            crc_table[i] = r;
+        end
+    endfunction
+
+    // The CRC to use for computing the FCS.
+    localparam CRCTable CRC_TABLE = crc_table();
+
     // Indicates the index of the preamble and SFD to send.
     int unsigned preamble_nibble;
 
@@ -377,55 +409,60 @@ module ethernet_udp_transmit #(
                 frame.udp_header.checksum  <= '0; // Left as 0
                 // Add the data to the frame
                 frame.data <= data;
-                // Zero the CRC so it can be computed later
-                frame.fcs <= '0;
+                // The CRC starts as all 1's
+                frame.fcs <= 32'hFFFFFFFF;
                 // Others
-                frame_nibble    <= '0;
-                gap_nibble      <= '0;
-                preamble_nibble <= '0;
-                ready           <= 0;
-                state           <= CHECKSUM;
+                ready <= 0;
+                state <= CHECKSUM;
             end
             // Compute some checksums
             CHECKSUM: begin
                 // Compute the IP header checksum
                 frame.ip_header.header_checksum <= ~(
-                    frame.ip_header[8*20-1:8*18] +
-                    frame.ip_header[8*18-1:8*16] +
-                    frame.ip_header[8*16-1:8*14] +
-                    frame.ip_header[8*14-1:8*12] +
-                    frame.ip_header[8*12-1:8*10] +
-                    frame.ip_header[8*10-1:8* 8] +
-                    frame.ip_header[8* 8-1:8* 6] +
-                    frame.ip_header[8* 6-1:8* 4] +
-                    frame.ip_header[8* 4-1:8* 2] +
-                    frame.ip_header[8* 2-1:8* 0]);
+                    frame.ip_header[144+:16] +
+                    frame.ip_header[128+:16] +
+                    frame.ip_header[112+:16] +
+                    frame.ip_header[ 96+:16] +
+                    frame.ip_header[ 80+:16] +
+                    frame.ip_header[ 64+:16] +
+                    frame.ip_header[ 48+:16] +
+                    frame.ip_header[ 32+:16] +
+                    frame.ip_header[ 16+:16] +
+                    frame.ip_header[  0+:16]);
                 // Others
                 state <= SEND_PREAMBLE_SFD;
             end
             // Send the preamble and SFD to the PHY
             SEND_PREAMBLE_SFD: begin
-                // TODO
                 if (preamble_nibble < PREAMBLE_SFD_NIBBLES) begin
-                    // TODO Send
+                    // TODO Send the data
                     preamble_nibble <= preamble_nibble + 1;
                 end else begin
+                    // Reset the counter for the next time
+                    preamble_nibble <= '0;
+                    // Others
                     state <= SEND_FRAME;
                 end
             end
             // Send the frame to the PHY
             SEND_FRAME: if (phy_clk) begin
-                // TODO Use the right bound
+                // Get the current nibble
+                // TODO Get the right nibble
+                logic [3:0] nibble = frame[4*frame_nibble+:4];
                 if (frame_nibble < FRAME_NIBBLES) begin
                     // Only add the current byte the FCS CRC when the nibble
                     // index is before the start index of the FCS.
-                    if (frame_nibble < FRAME_NIBBLES - FCS_NIBBLES &&
-                            (frame_nibble & 1) == 0) begin
-                        // TODO Contribute 8 bits to the CRC
+                    if (frame_nibble < FRAME_NIBBLES - FCS_NIBBLES) begin
+                        frame.fcs <= (frame.fcs >> FCS_STEP) & CRC_TABLE[
+                            (frame.fcs ^ nibble) & (2 ** FCS_STEP - 1)];
                     end
                     frame_nibble <= frame_nibble + 1;
+                    // TODO 1's complement the CRC
                     // TODO Write nibble to PHY
                 end else begin
+                    // Reset the counter for the next time
+                    frame_nibble <= '0;
+                    // Others
                     state <= WAIT;
                 end
             end
