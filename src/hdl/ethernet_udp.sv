@@ -299,11 +299,13 @@ module ethernet_udp_transmit #(
 
     // Generate the clock signal to transmit on.
     logic phy_clk;
+    logic phy_clk_pulse;
     phy_clk_gen #(.DIVIDER(DIVIDER)) phy_clk_gen_0(
         .clk(clk),
         .reset(clk),
         .clear(0),
-        .phy_clk(phy_clk)
+        .phy_clk(phy_clk),
+        .phy_clk_pulse(phy_clk_pulse)
     );
 
     // Track the previous send value for edge detection
@@ -423,7 +425,7 @@ module ethernet_udp_transmit #(
                 state <= SEND_PREAMBLE_SFD;
             end
             // Send the preamble and SFD to the PHY
-            SEND_PREAMBLE_SFD: begin
+            SEND_PREAMBLE_SFD: if (phy_clk_pulse) begin
                 if (i < PREAMBLE_SFD_NIBBLES) begin
                     eth.tx_d <= (i < PREAMBLE_SFD_NIBBLES - 1) ?
                         4'b1010 : 4'b1011;
@@ -434,7 +436,7 @@ module ethernet_udp_transmit #(
                 end
             end
             // Send the frame to the PHY
-            SEND_FRAME: if (phy_clk) begin
+            SEND_FRAME: if (phy_clk_pulse) begin
                 // Select the current nibble. This selects nibbles according to
                 // the following diagram. Suppose there are 3 bytes, their
                 // nibble indices are like the following.
@@ -466,7 +468,7 @@ module ethernet_udp_transmit #(
                 end
             end
             // Wait the appropriate time for the Ethernet interframe gap
-            WAIT: if (phy_clk) begin
+            WAIT: if (phy_clk_pulse) begin
                 if (i < GAP_NIBBLES) begin
                     i <= i + 1;
                 end else begin
@@ -497,13 +499,21 @@ endmodule
 /// *   [clear] is a synchronous clear signal that resets the output clocks
 ///     while it is asserted. The clocks will begin counting when this is
 ///     deasserted.
-/// *   [phy_clk] is the generated UDP clock.
+/// *   [phy_clk] is the generated UDP clock with as close to 50% duty cycle as
+///     possible. The duty cycle is `(DIVIDER // 2)` / DIVIDER where `//` is
+///     used to represent floored division. So an even [DIVIDER] will have a
+///     duty cycle of 50% and an odd divider will be as close as possible to
+///     50%.
+/// *   [phy_clk_pulse] has the same rising edge timing as [phy_clk], though
+///     it is only held high for one cycle of the generating clock. This is so
+///     it can be used in the logic without an edge detector.
 module phy_clk_gen #(
     parameter int DIVIDER = 0) (
     input logic clk,
     input logic reset,
     input logic clear,
-    output logic phy_clk);
+    output logic phy_clk,
+    output logic phy_clk_pulse);
 
     // Assert that the parameters are appropriate
     initial begin
@@ -512,27 +522,23 @@ module phy_clk_gen #(
         end
     end
 
-    // The total width of the unsigned integer needed for the counter.
-    localparam int COUNTER_SIZE = $clog2(DIVIDER - 1) + 1;
-
-    // A minimum width integer to use for the clock division counters.
-    typedef logic unsigned [COUNTER_SIZE-1:0] CounterInt;
-
     // These values are used to divide the clock.
-    localparam CounterInt COUNTER_MAX  = DIVIDER - 1;
-    localparam CounterInt COUNTER_ONE  = 1;
+    localparam int unsigned COUNTER_MAX  = DIVIDER - 1;
+    localparam int unsigned COUNTER_FLIP = DIVIDER / 2;
 
     // The counted value used to derive the clock
-    CounterInt counter;
+    int unsigned counter;
 
     // Update the generated clock.
     always_ff @(posedge clk) begin
-        if (reset || clear || counter >= COUNTER_MAX) begin
-            phy_clk <= 0;
-            counter <= '0;
+        if (reset || clear) begin
+            phy_clk       <= 0;
+            phy_clk_pulse <= '0;
+            counter       <= '0;
         end else begin
-            phy_clk <= counter == COUNTER_ONE;
-            counter <= counter + 1;
+            phy_clk       <= counter >= COUNTER_FLIP;
+            phy_clk_pulse <= counter == COUNTER_FLIP;
+            counter       <= counter < COUNTER_MAX ? counter + 1 : '0;
         end
     end
 
