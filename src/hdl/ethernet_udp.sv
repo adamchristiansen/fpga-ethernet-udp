@@ -19,14 +19,10 @@
 ///
 /// # Fields
 ///
-/// *   [preamble] is a group of alternating 0's and 1's.
-/// *   [sfd] marks the end of the preamble.
 /// *   [dest_mac] is the destination MAC address.
 /// *   [src_mac] is the source MAC address.
 /// *   [ether_type] indicates the protocol of the packet being sent.
 typedef struct packed {
-    logic unsigned [55:0] preamble;
-    logic unsigned [7:0] sfd;
     logic unsigned [47:0] dest_mac;
     logic unsigned [47:0] src_mac;
     logic unsigned [15:0] ether_type;
@@ -234,32 +230,42 @@ module ethernet_udp_transmit #(
         end
     end
 
-    // The total number of nibbles in the data.
-    localparam int unsigned DATA_NIBBLES = 2 * DATA_BYTES;
+    // The number of bytes in parts of the frame.
+    localparam int unsigned PREAMBLE_SFD_BYTES = 8;
+    localparam int unsigned ETHER_HEADER_BYTES = 14;
+    localparam int unsigned IP_HEADER_BYTES = 20;
+    localparam int unsigned UDP_HEADER_BYTES = 8;
+    localparam int unsigned FCS_BYTES = 4;
 
-    // The bytes used in the preamble and the SFD.
-    localparam int unsigned PREAMBLE_BYTE = 8'b10101010;
-    localparam int unsigned SFD_BYTE      = 8'b10101011;
+    // The total number of bytes in the IP packet.
+    localparam int unsigned IP_BYTES =
+        IP_HEADER_BYTES + UDP_HEADER_BYTES + DATA_BYTES;
+
+    // The total number of bytes in the UDP packet.
+    localparam int unsigned UDP_BYTES = UDP_HEADER_BYTES + DATA_BYTES;
+
+    // The number of nibbles in parts of the frame.
+    localparam int unsigned PREAMBLE_SFD_NIBBLES = 2 * PREAMBLE_SFD_BYTES;
+    localparam int unsigned ETHER_HEADER_NIBBLES = 2 * ETHER_HEADER_BYTES;
+    localparam int unsigned IP_HEADER_NIBBLES = 2 * IP_HEADER_BYTES;
+    localparam int unsigned UDP_HEADER_NIBBLES = 2 * UDP_HEADER_BYTES;
+    localparam int unsigned DATA_NIBBLES = 2 * DATA_BYTES;
+    localparam int unsigned FCS_NIBBLES = 2 * DATA_BYTES;
+
+    // The number of nibbles send not counting the preamble and SFD.
+    localparam int FRAME_NIBBLES = ETHER_HEADER_NIBBLES + IP_HEADER_NIBBLES +
+        UDP_HEADER_NIBBLES + DATA_NIBBLES + FCS_NIBBLES;
+
+    // The number of write cycles to wait after sending after writing data to
+    // the PHY. This must be at least 12 bytes worth of time.
+    localparam int unsigned GAP_NIBBLES = 24;
+
+    localparam logic unsigned [63:0] PREAMBLE_SFD =
+        64'hAA_AA_AA_AA_AA_AA_AA_AB;
 
     // The Ethernet type for the Ethernet header. This value indicates that
     // IPv4 is used.
     localparam int unsigned ETHER_TYPE = 16'h0800;
-
-    // The number of bytes in the IP header.
-    localparam int unsigned IP_HEADER_BYTES = 20;
-
-    // The number of bytes in the IP header.
-    localparam int unsigned UDP_HEADER_BYTES = 8;
-
-    // The total number of bytes in the IP packet.
-    localparam int unsigned IP_TOTAL_BYTES =
-        IP_HEADER_BYTES + UDP_HEADER_BYTES + DATA_BYTES;
-
-    // The total number of nibbles in the IP packet.
-    localparam int unsigned IP_TOTAL_NIBBLES = 2 * IP_TOTAL_BYTES;
-
-    // The total number of bytes in the UDP packet.
-    localparam int unsigned UDP_TOTAL_BYTES = UDP_HEADER_BYTES + DATA_BYTES;
 
     // The IP version to use.
     localparam int unsigned IP_VERSION = 4;
@@ -285,9 +291,14 @@ module ethernet_udp_transmit #(
     // The IP next level protocol to use. This is the User Datagram Protocol.
     localparam int unsigned IP_PROTOCOL = 8'h11;
 
-    // The number of write cycles to wait after sending after writing data to
-    // the PHY. This must be at least 12 bytes worth of time.
-    localparam int unsigned GAP_NIBBLES = 24;
+    // This structure represents a frame to be sent.
+    struct packed {
+        EthernetHeader eth_header;
+        IPHeader ip_header;
+        UDPHeader udp_header;
+        logic [8*DATA_BYTES-1:0] data;
+        logic [15:0] fcs;
+    } frame;
 
     // Generate the clock signal to transmit on.
     logic phy_clk;
@@ -315,102 +326,104 @@ module ethernet_udp_transmit #(
     enum {
         READY,
         CHECKSUM,
-        SEND,
+        SEND_PREAMBLE_SFD,
+        SEND_FRAME,
         WAIT
     } state;
 
-    // This structure represents a packet to be sent.
-    struct packed {
-        EthernetHeader eth_header;
-        IPHeader ip_header;
-        UDPHeader udp_header;
-        logic [8*DATA_BYTES-1:0] data;
-        logic [15:0] crc;
-    } packet;
+    // Indicates the index of the preamble and SFD to send.
+    int unsigned preamble_nibble;
 
     // Indicates the index of the current nibble to send.
-    int unsigned nibble;
+    int unsigned frame_nibble;
 
     // A counter to use to wait the appropriate number of cycles after sending
-    // the packet.
+    // the frame.
     int unsigned gap_nibble;
 
     // Run the state machine that sends that data to the PHY.
     always_ff @(posedge clk) begin
         if (reset) begin
-            nibble     <= '0;
-            gap_nibble <= '0;
-            packet     <= '0;
-            ready      <= 1;
-            state      <= READY;
+            frame           <= '0;
+            frame_nibble    <= '0;
+            gap_nibble      <= '0;
+            preamble_nibble <= '0;
+            ready           <= 1;
+            state           <= READY;
         end else begin
             case (state)
             // Latch the data
             READY: if (!send_prev && send) begin
-                // Set the preamble and SFD.
-                packet.eth_header.preamble[7*8-1:6*8] <= PREAMBLE_BYTE;
-                packet.eth_header.preamble[6*8-1:5*8] <= PREAMBLE_BYTE;
-                packet.eth_header.preamble[5*8-1:4*8] <= PREAMBLE_BYTE;
-                packet.eth_header.preamble[4*8-1:3*8] <= PREAMBLE_BYTE;
-                packet.eth_header.preamble[3*8-1:2*8] <= PREAMBLE_BYTE;
-                packet.eth_header.preamble[2*8-1:1*8] <= PREAMBLE_BYTE;
-                packet.eth_header.preamble[1*8-1:0*8] <= PREAMBLE_BYTE;
-                packet.eth_header.sfd                 <= SFD_BYTE;
                 // Construct the Ethernet header
-                packet.eth_header.dest_mac   <= ip_info.dest_mac;
-                packet.eth_header.src_mac    <= ip_info.src_mac;
-                packet.eth_header.ether_type <= ETHER_TYPE;
+                frame.eth_header.dest_mac   <= ip_info.dest_mac;
+                frame.eth_header.src_mac    <= ip_info.src_mac;
+                frame.eth_header.ether_type <= ETHER_TYPE;
                 // Construct the IP header
-                packet.ip_header.version         <= IP_VERSION;
-                packet.ip_header.ihl             <= IP_IHL;
-                packet.ip_header.type_of_service <= IP_TOS;
-                packet.ip_header.total_length    <= IP_TOTAL_BYTES;
-                packet.ip_header.identification  <= IP_ID;
-                packet.ip_header.flags           <= IP_FLAGS;
-                packet.ip_header.fragment_offset <= IP_FRAG_OFFSET;
-                packet.ip_header.time_to_live    <= IP_TTL;
-                packet.ip_header.protocol        <= IP_PROTOCOL;
-                packet.ip_header.header_checksum <= '0; // Computed later
-                packet.ip_header.src_ip          <= ip_info.src_ip;
-                packet.ip_header.dest_ip         <= ip_info.dest_ip;
+                frame.ip_header.version         <= IP_VERSION;
+                frame.ip_header.ihl             <= IP_IHL;
+                frame.ip_header.type_of_service <= IP_TOS;
+                frame.ip_header.total_length    <= IP_BYTES;
+                frame.ip_header.identification  <= IP_ID;
+                frame.ip_header.flags           <= IP_FLAGS;
+                frame.ip_header.fragment_offset <= IP_FRAG_OFFSET;
+                frame.ip_header.time_to_live    <= IP_TTL;
+                frame.ip_header.protocol        <= IP_PROTOCOL;
+                frame.ip_header.header_checksum <= '0; // Computed later
+                frame.ip_header.src_ip          <= ip_info.src_ip;
+                frame.ip_header.dest_ip         <= ip_info.dest_ip;
                 // Construct the UDP header
-                packet.udp_header.dest_port <= ip_info.dest_port;
-                packet.udp_header.length    <= UDP_TOTAL_BYTES;
-                packet.udp_header.checksum  <= '0; // Left as 0
-                // Add the data to the packet
-                packet.data <= data;
+                frame.udp_header.dest_port <= ip_info.dest_port;
+                frame.udp_header.length    <= UDP_BYTES;
+                frame.udp_header.checksum  <= '0; // Left as 0
+                // Add the data to the frame
+                frame.data <= data;
                 // Zero the CRC so it can be computed later
-                packet.crc <= '0;
+                frame.fcs <= '0;
                 // Others
-                nibble <= '0;
-                ready  <= 0;
-                state  <= CHECKSUM;
+                frame_nibble    <= '0;
+                gap_nibble      <= '0;
+                preamble_nibble <= '0;
+                ready           <= 0;
+                state           <= CHECKSUM;
             end
             // Compute some checksums
             CHECKSUM: begin
                 // Compute the IP header checksum
-                packet.ip_header.header_checksum <= ~(
-                    packet.ip_header[8*20-1:8*18] +
-                    packet.ip_header[8*18-1:8*16] +
-                    packet.ip_header[8*16-1:8*14] +
-                    packet.ip_header[8*14-1:8*12] +
-                    packet.ip_header[8*12-1:8*10] +
-                    packet.ip_header[8*10-1:8* 8] +
-                    packet.ip_header[8* 8-1:8* 6] +
-                    packet.ip_header[8* 6-1:8* 4] +
-                    packet.ip_header[8* 4-1:8* 2] +
-                    packet.ip_header[8* 2-1:8* 0]);
+                frame.ip_header.header_checksum <= ~(
+                    frame.ip_header[8*20-1:8*18] +
+                    frame.ip_header[8*18-1:8*16] +
+                    frame.ip_header[8*16-1:8*14] +
+                    frame.ip_header[8*14-1:8*12] +
+                    frame.ip_header[8*12-1:8*10] +
+                    frame.ip_header[8*10-1:8* 8] +
+                    frame.ip_header[8* 8-1:8* 6] +
+                    frame.ip_header[8* 6-1:8* 4] +
+                    frame.ip_header[8* 4-1:8* 2] +
+                    frame.ip_header[8* 2-1:8* 0]);
                 // Others
-                state <= SEND;
+                state <= SEND_PREAMBLE_SFD;
             end
-            // Send the data to the PHY
-            SEND: if (phy_clk) begin
-                // TODO Decrement the nibble
-                if (nibble < IP_TOTAL_NIBBLES) begin
-                    if (nibble < DATA_NIBBLES && nibble % 4 == 0) begin
-                        // TODO Contribute 16 data bits to the CRC
+            // Send the preamble and SFD to the PHY
+            SEND_PREAMBLE_SFD: begin
+                // TODO
+                if (preamble_nibble < PREAMBLE_SFD_NIBBLES) begin
+                    // TODO Send
+                    preamble_nibble <= preamble_nibble + 1;
+                end else begin
+                    state <= SEND_FRAME;
+                end
+            end
+            // Send the frame to the PHY
+            SEND_FRAME: if (phy_clk) begin
+                // TODO Use the right bound
+                if (frame_nibble < FRAME_NIBBLES) begin
+                    // Only add the current byte the FCS CRC when the nibble
+                    // index is before the start index of the FCS.
+                    if (frame_nibble < FRAME_NIBBLES - FCS_NIBBLES &&
+                            (frame_nibble & 1) == 0) begin
+                        // TODO Contribute 8 bits to the CRC
                     end
-                    nibble <= nibble + 1;
+                    frame_nibble <= frame_nibble + 1;
                     // TODO Write nibble to PHY
                 end else begin
                     state <= WAIT;
