@@ -260,9 +260,6 @@ module ethernet_udp_transmit #(
     // the PHY. This must be at least 12 bytes worth of time.
     localparam int unsigned GAP_NIBBLES = 24;
 
-    localparam logic unsigned [63:0] PREAMBLE_SFD =
-        64'hAA_AA_AA_AA_AA_AA_AA_AB;
-
     // The Ethernet type for the Ethernet header. This value indicates that
     // IPv4 is used.
     localparam int unsigned ETHER_TYPE = 16'h0800;
@@ -363,25 +360,17 @@ module ethernet_udp_transmit #(
     // The CRC to use for computing the FCS.
     localparam CRCTable CRC_TABLE = crc_table();
 
-    // Indicates the index of the preamble and SFD to send.
-    int unsigned preamble_nibble;
-
-    // Indicates the index of the current nibble to send.
-    int unsigned frame_nibble;
-
-    // A counter to use to wait the appropriate number of cycles after sending
-    // the frame.
-    int unsigned gap_nibble;
+    // This is used as a general purpose counter. Note that this is signed
+    // because it is used to count up and down.
+    int i;
 
     // Run the state machine that sends that data to the PHY.
     always_ff @(posedge clk) begin
         if (reset) begin
-            frame           <= '0;
-            frame_nibble    <= '0;
-            gap_nibble      <= '0;
-            preamble_nibble <= '0;
-            ready           <= 1;
-            state           <= READY;
+            frame <= '0;
+            i     <= '0;
+            ready <= 1;
+            state <= READY;
         end else begin
             case (state)
             // Latch the data
@@ -434,46 +423,55 @@ module ethernet_udp_transmit #(
             end
             // Send the preamble and SFD to the PHY
             SEND_PREAMBLE_SFD: begin
-                if (preamble_nibble < PREAMBLE_SFD_NIBBLES) begin
-                    // TODO Send the data
-                    preamble_nibble <= preamble_nibble + 1;
+                if (i < PREAMBLE_SFD_NIBBLES) begin
+                    // TODO Write this data to the ports
+                    // (i < PREANBLE_SFD_NIBBLES - 1)
+                    //    ? 4'b1010
+                    //    : 4'b1011;
+                    i <= i + 1;
                 end else begin
-                    // Reset the counter for the next time
-                    preamble_nibble <= '0;
-                    // Others
+                    i     <= FRAME_NIBBLES - 1;
                     state <= SEND_FRAME;
                 end
             end
             // Send the frame to the PHY
             SEND_FRAME: if (phy_clk) begin
-                // Get the current nibble
-                // TODO Get the right nibble
-                logic [3:0] nibble = frame[4*frame_nibble+:4];
-                if (frame_nibble < FRAME_NIBBLES) begin
+                // Select the current nibble. This selects nibbles according to
+                // the following diagram. Suppose there are 3 bytes, their
+                // nibble indices are like the following.
+                //
+                //          23:20    19:16   15:12    11:8      7:4     3:0
+                //            <--------+
+                //            +------------------------->
+                //                             <--------+
+                //                             +------------------------->
+                //                                             <---------+
+                // Index:     4       5        2        3        0       1
+                //
+                // These are sent from highest index to lowest.
+                logic [3:0] nibble = frame[8 * (i >> 1) + 4 * ((~i) & 1)+:4];
+                // Note that this loop counts down
+                if (i >= 0) begin
                     // Only add the current byte the FCS CRC when the nibble
                     // index is before the start index of the FCS.
-                    if (frame_nibble < FRAME_NIBBLES - FCS_NIBBLES) begin
-                        frame.fcs <= (frame.fcs >> FCS_STEP) & CRC_TABLE[
-                            (frame.fcs ^ nibble) & (2 ** FCS_STEP - 1)];
+                    if (i >= FCS_NIBBLES) begin
+                        frame.fcs <= (frame.fcs >> FCS_STEP) &
+                            CRC_TABLE[(frame.fcs ^ i) & (2 ** FCS_STEP - 1)];
                     end
-                    frame_nibble <= frame_nibble + 1;
+                    i <= i - 1;
                     // TODO 1's complement the CRC
                     // TODO Write nibble to PHY
                 end else begin
-                    // Reset the counter for the next time
-                    frame_nibble <= '0;
-                    // Others
+                    i     <= '0;
                     state <= WAIT;
                 end
             end
             // Wait the appropriate time for the Ethernet interframe gap
             WAIT: if (phy_clk) begin
-                if (gap_nibble < GAP_NIBBLES) begin
-                    gap_nibble <= gap_nibble + 1;
+                if (i < GAP_NIBBLES) begin
+                    i <= i + 1;
                 end else begin
-                    // Reset the count for the next time
-                    gap_nibble <= '0;
-                    // Others
+                    i     <= '0;
                     ready <= 1;
                     state <= READY;
                 end
