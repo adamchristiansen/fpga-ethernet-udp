@@ -1,0 +1,33 @@
+name: Serial Tester
+about: Tests the serial connection to an FPGA echo server. The program generates random data to send back and forth between the computer and the serial device.
+args:
+    - port:
+        value_name: PORT
+        help: The name of the serial port to use.
+        required: true
+        index: 1
+    - ip:
+        value_name: IP
+        help: The IP address and port in the format of xxx.xxx.xxx.xxx:xxxxx.
+        required: true
+        index: 2
+    - baud:
+        value_name: BAUD
+        short: b
+        long: baud
+        help: Set the port baud.
+        required: true
+        takes_value: true
+    - fail-only:
+        short: f
+        long: fail-only
+        help: Only show the failures.
+        multiple: true
+        global: true
+    - reps:
+        value_name: REPS
+        short: r
+        long: reps
+        required: true
+        help: Set the number of repetitions to run for each test.
+        takes_value: true

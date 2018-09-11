@@ -1,0 +1,9 @@
+[package]
+name = "ether_tester"
+version = "0.1.0"
+
+[dependencies]
+ansi_term = "0.11.0"
+clap = { version = "2.32.0", features = ["yaml"] }
+rand = "0.5.5"
+serial = "0.4.0"
