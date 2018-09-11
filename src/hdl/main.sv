@@ -22,10 +22,9 @@
 /// *   [eth_tx_en] is the transmit enable. This is an active high indicator
 ///     that the value on [eth_rx_d] is valid.
 /// *   [eth_tx_d] is the data to transmit.
-/// *   [usb_rx] is the receive end of the serial.
-/// *   [usb_tx] is the transmit end of the serial.
+/// *   [uart_rx] is the receive end of the serial.
+/// *   [uart_tx] is the transmit end of the serial.
 /// *   [led] is a bus of LEDs used for indicating status.
-/// *   [send_eth] tells the ethernet module to send data on the rising edge.
 module main(
     // System
     input logic clk,
@@ -40,15 +39,110 @@ module main(
     output logic eth_tx_en,
     output logic unsigned [3:0] eth_tx_d,
     // USB UART
-    input logic usb_rx,
-    output logic usb_tx,
+    input logic uart_rx,
+    output logic uart_tx,
     // General IO
-    output logic [3:0] led,
-    input logic send_eth);
+    output logic [3:0] led);
+
+    //-------------------------------------------------------------------------
+    // USB UART
+    //-------------------------------------------------------------------------
+
+    // The clock divider to get 115200Hz from 100MHz
+    localparam int DIVIDER = 868;
+
+    // The data received and sent on the UART.
+    logic [7:0] uart_data;
+
+    // Indicates that a byte was received on the UART.
+    logic uart_receive_ready;
+
+    // This is a structure of parameters that descibes what to send.
+    struct packed {
+        logic [63:0] src_ip;
+        logic [48:0] src_mac;
+        logic [15:0] src_port;
+        logic [63:0] dest_ip;
+        logic [48:0] dest_mac;
+        logic [15:0] dest_port;
+        logic [7:0] seed;
+        logic [7:0] generator;
+    } params;
+
+    // Indicates that the parameters have been received and are ready.
+    logic params_ready;
+
+    // The number of bytes in the parameters.
+    localparam int unsigned PARAM_BYTES = 34;
+
+    // The index into the parameters for assigning bytes read on the UART.
+    int unsigned param_index;
+
+    uart_receive #(.DIVIDER(DIVIDER)) uart_receive(
+        .clk(clk),
+        .reset(reset),
+        .rx(uart_rx),
+        .data(uart_data),
+        .ready(uart_receive_ready)
+    );
+
+    // Prepare the parameters for use in the UDP packet.
+    always_ff @(posedge clk) begin
+        if (reset) begin
+            param_index <= PARAM_BYTES - 1;
+            params      <= '0;
+            params_ready <= 0;
+        end else if (uart_receive_ready) begin
+            params[8*param_index+:8] <= uart_data;
+            if (param_index == 0) begin
+                param_index  <= PARAM_BYTES - 1;
+                params_ready <= 1;
+            end else begin
+                param_index <= param_index - 1;
+                params_ready <= 0;
+            end
+        end else begin
+            params_ready <= 0;
+        end
+    end
+
+    uart_transmit #(.DIVIDER(DIVIDER)) uart_transmit(
+        .clk(clk),
+        .reset(reset),
+        .data(uart_data),
+        .send(uart_receive_ready),
+        .ready(/* Not connected */),
+        .tx(uart_tx)
+    );
 
     //-------------------------------------------------------------------------
     // Ethernet
     //-------------------------------------------------------------------------
+
+    // The number of bytes to send in a UDP packet.
+    localparam int unsigned DATA_BYTES = 256;
+
+    // The data to be sent in a UDP packet.
+    logic unsigned [8*DATA_BYTES-1:0] eth_data;
+
+    // Indicates that the current data should be sent over UDP.
+    logic send_eth;
+
+    // When there is new data from the UART, prepare the data to be sent over
+    // Ethernet.
+    always_ff @(posedge clk) begin
+        if (reset) begin
+            eth_data <= '0;
+            send_eth <= 0;
+        end else if (params_ready) begin
+            for (int unsigned i = 0; i < DATA_BYTES; i++) begin
+                eth_data[8*i+:8] <= params.seed + (params.generator * i);
+            end
+            send_eth <= 1;
+        end else begin
+            send_eth <= 0;
+        end
+    end
 
     // Instantiate an interface with the Ethernet PHY control signals
     EthernetPHY eth();
@@ -61,28 +155,14 @@ module main(
     assign eth.tx_en   = eth_tx_en;
     assign eth.tx_d    = eth_tx_d;
 
-    // The width of the data to send
-    localparam int DATA_BYTES = 8;
-
-    // The data to send over Ethernet
-    logic [63:0] data;
-    assign data[63:56] = 8'b1111_0000;
-    assign data[55:48] = 8'b0101_0101;
-    assign data[47:40] = 8'b0111_0010;
-    assign data[39:32] = 8'b0100_1000;
-    assign data[31:24] = 8'b0001_0001;
-    assign data[23:16] = 8'b0110_0000;
-    assign data[15:8]  = 8'b0000_1100;
-    assign data[7:0]   = 8'b1111_0000;
-
     // The information needed to describe the source and the destination
     IPInfo ip_info;
-    assign ip_info.src_ip    = '0;
-    assign ip_info.src_mac   = '0;
-    assign ip_info.src_port  = '0;
-    assign ip_info.dest_ip   = '0;
-    assign ip_info.dest_mac  = '0;
-    assign ip_info.dest_port = '0;
+    assign ip_info.src_ip    = params.src_ip;
+    assign ip_info.src_mac   = params.src_mac;
+    assign ip_info.src_port  = params.src_port;
+    assign ip_info.dest_ip   = params.dest_ip;
+    assign ip_info.dest_mac  = params.dest_mac;
+    assign ip_info.dest_port = params.dest_port;
 
     ethernet_udp_transmit #(.DATA_BYTES(DATA_BYTES), .DIVIDER(4))
     ethernet_udp_transmit(
@@ -90,7 +170,7 @@ module main(
         .clk(clk),
         .reset(reset),
         // Ethernet
-        .data(data),
+        .data(eth_data),
         .eth(eth),
         .ip_info(ip_info),
         .ready(led[0]),
@@ -99,37 +179,5 @@ module main(
 
     // The rest of the LEDs are unused
     assign led[3:1] = '0;
-
-    //-------------------------------------------------------------------------
-    // USB UART
-    //-------------------------------------------------------------------------
-
-    // TODO Set parameters over serial. For now, this is just an echo server
-
-    // The clock divider to get 115200Hz from 100MHz
-    localparam int DIVIDER = 868;
-
-    // The data received and sent over serial
-    logic [7:0] usb_data;
-
-    // Indicates that a byte was received
-    logic receive_ready;
-
-    uart_receive #(.DIVIDER(DIVIDER)) uart_receive(
-        .clk(clk),
-        .reset(reset),
-        .rx(usb_rx),
-        .data(usb_data),
-        .ready(receive_ready)
-    );
-
-    uart_transmit #(.DIVIDER(DIVIDER)) uart_transmit(
-        .clk(clk),
-        .reset(reset),
-        .data(usb_data),
-        .send(receive_ready),
-        .ready(/* Not connected */),
-        .tx(usb_tx)
-    );
 
 endmodule
