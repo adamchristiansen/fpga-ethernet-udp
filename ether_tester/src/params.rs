@@ -120,26 +120,6 @@ impl Params {
     pub fn src_mac_string(&self) -> String {
         format_mac(&self.src_mac)
     }
-
-    /// Get the destination information as a string.
-    ///
-    /// # Returns
-    ///
-    /// The destination address as a human-readable string.
-    pub fn dest_info(&self) -> String {
-        format!("IP {}, Port {}, MAC {}", &self.dest_ip_string(), &self.dest_port,
-            &self.dest_mac_string())
-    }
-
-    /// Get the source information as a string.
-    ///
-    /// # Returns
-    ///
-    /// The source address as a human-readable string.
-    pub fn src_info(&self) -> String {
-        format!("IP {}, Port {}, MAC {}", &self.src_ip_string(), &self.src_port,
-            &self.src_mac_string())
-    }
 }
 
 /// Parse the bytes parameter.
