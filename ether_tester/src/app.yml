@@ -1,33 +1,44 @@
-name: Serial Tester
-about: Tests the serial connection to an FPGA echo server. The program generates random data to send back and forth between the computer and the serial device.
+name: Ethernet Tester
+about: Tests the Ethernet stream from an FPGA. The FPGA must be configured to stream pseudo-RNG sequences.
 args:
-    - port:
-        value_name: PORT
-        help: The name of the serial port to use.
-        required: true
-        index: 1
-    - ip:
-        value_name: IP
-        help: The IP address and port in the format of xxx.xxx.xxx.xxx:xxxxx.
-        required: true
-        index: 2
-    - baud:
-        value_name: BAUD
+    - bytes:
+        value_name: BYTES
         short: b
-        long: baud
-        help: Set the port baud.
+        long: bytes
+        help: The number of bytes to generate for a single test packet.
         required: true
         takes_value: true
-    - fail-only:
-        short: f
-        long: fail-only
-        help: Only show the failures.
-        multiple: true
-        global: true
+    - dest:
+        value_name: DEST
+        short: d
+        long: dest
+        help: The IP address, port, and MAC address of the host in the format of `iii.iii.iii.iii:ppppp,mm:mm:mm:mm:mm:mm` where the `i`s are IP address, `p`s are port, and `m`s are MAC address.
+        required: true
+        takes_value: true
     - reps:
         value_name: REPS
         short: r
         long: reps
+        help: The number of repetitions of the test to run.
         required: true
-        help: Set the number of repetitions to run for each test.
+        takes_value: true
+    - serial-port:
+        value_name: SERIAL_PORT
+        short: p
+        long: serial-port
+        help: The name of the serial port to use and its baudrate. The port name and the baudrate are to be spearated by a colon `:`.
+        required: true
+        takes_value: true
+    - show-all:
+        short: a
+        long: show-all
+        help: Show all test results, not just failues.
+        multiple: true
+        global: true
+    - src:
+        value_name: SRC
+        short: s
+        long: src
+        help: The IP address, port, and MAC address of the source in the format of `iii.iii.iii.iii:ppppp,mm:mm:mm:mm:mm:mm` where the `i`s are IP address, `p`s are port, and `m`s are MAC address.
+        required: true
         takes_value: true
