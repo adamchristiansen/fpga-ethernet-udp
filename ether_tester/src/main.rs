@@ -38,8 +38,6 @@ fn main() {
         Ok(())
     });
 
-    // TODO Open socket for UDP
-
     // Print the test information
     println!("Parameters");
     println!("----------");
