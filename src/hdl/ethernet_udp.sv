@@ -111,10 +111,10 @@ typedef struct packed {
 /// *   [dest_port] is the destination port number.
 typedef struct packed {
     logic unsigned [31:0] src_ip;
-    logic unsigned [31:0] src_mac;
+    logic unsigned [47:0] src_mac;
     logic unsigned [15:0] src_port;
     logic unsigned [31:0] dest_ip;
-    logic unsigned [31:0] dest_mac;
+    logic unsigned [47:0] dest_mac;
     logic unsigned [15:0] dest_port;
 } IPInfo;
 
