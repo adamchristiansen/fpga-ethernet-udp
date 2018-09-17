@@ -59,11 +59,11 @@ module main(
 
     // This is a structure of parameters that descibes what to send.
     struct packed {
-        logic [63:0] src_ip;
-        logic [48:0] src_mac;
+        logic [32:0] src_ip;
+        logic [47:0] src_mac;
         logic [15:0] src_port;
-        logic [63:0] dest_ip;
-        logic [48:0] dest_mac;
+        logic [32:0] dest_ip;
+        logic [47:0] dest_mac;
         logic [15:0] dest_port;
         logic [7:0] seed;
         logic [7:0] generator;
@@ -73,7 +73,7 @@ module main(
     logic params_ready;
 
     // The number of bytes in the parameters.
-    localparam int unsigned PARAM_BYTES = 34;
+    localparam int unsigned PARAM_BYTES = 26;
 
     // The index into the parameters for assigning bytes read on the UART.
     int unsigned param_index;
