@@ -281,5 +281,5 @@ fn format_ip(ip: &u32) -> String {
 /// A formatted MAC address.
 fn format_mac(mac: &u64) -> String {
     let f = |n| ((mac >> (8 * n)) & 0xFFu64);
-    format!("{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}", f(5), f(4), f(3), f(2), f(1), f(0))
+    format!("{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}", f(5), f(4), f(3), f(2), f(1), f(0))
 }
