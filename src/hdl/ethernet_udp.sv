@@ -308,6 +308,31 @@ module ethernet_udp_transmit #(
         .phy_clk_pulse(phy_clk_pulse)
     );
 
+    // TODO Can MDC and MDIO be removed?
+    // Set up the signals to the PHY
+    assign eth.mdc = 0;
+    assign eth.mdio = 0;
+    assign eth.ref_clk = phy_clk;
+
+    // Edge detection on the tx_clk
+    logic tx_clk_fall_prev;
+    logic tx_clk_rise_prev;
+    always_ff @(posedge clk) begin
+        if (reset) begin
+            // These are set appropriately to prevent false positives after a
+            // reset
+            tx_clk_fall_prev <= 0;
+            tx_clk_rise_prev <= 1;
+        end else begin
+            tx_clk_fall_prev <= eth.tx_clk;
+            tx_clk_rise_prev <= eth.tx_clk;
+        end
+    end
+    logic tx_clk_fall;
+    logic tx_clk_rise;
+    assign tx_clk_fall = tx_clk_fall_prev  && !eth.tx_clk;
+    assign tx_clk_rise = !tx_clk_rise_prev && eth.tx_clk;
+
     // Track the previous send value for edge detection
     logic send_prev;
     always_ff @(posedge clk) begin
@@ -370,11 +395,17 @@ module ethernet_udp_transmit #(
     // Run the state machine that sends that data to the PHY.
     always_ff @(posedge clk) begin
         if (reset) begin
-            frame <= '0;
-            i     <= '0;
-            ready <= 1;
-            state <= READY;
+            eth.rstn  <= 0;
+            eth.tx_d  <= '0;
+            eth.tx_en <= 0;
+            frame     <= '0;
+            i         <= '0;
+            ready     <= 1;
+            state     <= READY;
         end else begin
+            // No longer need to reset
+            eth.rstn <= 1;
+            // Run the state machine for what to send
             case (state)
             // Latch the data
             READY: if (!send_prev && send) begin
@@ -425,18 +456,19 @@ module ethernet_udp_transmit #(
                 state <= SEND_PREAMBLE_SFD;
             end
             // Send the preamble and SFD to the PHY
-            SEND_PREAMBLE_SFD: if (phy_clk_pulse) begin
+            SEND_PREAMBLE_SFD: if (tx_clk_fall) begin
                 if (i < PREAMBLE_SFD_NIBBLES) begin
                     eth.tx_d <= (i < PREAMBLE_SFD_NIBBLES - 1) ?
                         4'b1010 : 4'b1011;
-                    i <= i + 1;
+                    eth.tx_en <= 1;
+                    i         <= i + 1;
                 end else begin
                     i     <= FRAME_NIBBLES - 1;
                     state <= SEND_FRAME;
                 end
             end
             // Send the frame to the PHY
-            SEND_FRAME: if (phy_clk_pulse) begin
+            SEND_FRAME: if (tx_clk_fall) begin
                 // Select the current nibble. This selects nibbles according to
                 // the following diagram. Suppose there are 3 bytes, their
                 // nibble indices are like the following.
@@ -459,16 +491,17 @@ module ethernet_udp_transmit #(
                         frame.fcs <= (frame.fcs >> FCS_STEP) &
                             CRC_TABLE[(frame.fcs ^ i) & (2 ** FCS_STEP - 1)];
                     end
+                    // Take the one's complement of the FCS
+                    eth.tx_d <= i < FCS_NIBBLES ? ~nibble : nibble;
                     i        <= i - 1;
-                    eth.tx_d <= nibble;
-                    // TODO 1's complement the CRC
                 end else begin
-                    i     <= '0;
-                    state <= WAIT;
+                    eth.tx_en <= 0;
+                    i         <= '0;
+                    state     <= WAIT;
                 end
             end
             // Wait the appropriate time for the Ethernet interframe gap
-            WAIT: if (phy_clk_pulse) begin
+            WAIT: if (tx_clk_fall) begin
                 if (i < GAP_NIBBLES) begin
                     i <= i + 1;
                 end else begin
