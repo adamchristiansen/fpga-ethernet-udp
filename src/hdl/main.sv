@@ -24,7 +24,6 @@
 /// *   [eth_tx_d] is the data to transmit.
 /// *   [uart_rx] is the receive end of the serial.
 /// *   [uart_tx] is the transmit end of the serial.
-/// *   [led] is a bus of LEDs used for indicating status.
 module main(
     // System
     input logic clk,
@@ -40,9 +39,7 @@ module main(
     output logic unsigned [3:0] eth_tx_d,
     // USB UART
     input logic uart_rx,
-    output logic uart_tx,
-    // General IO
-    output logic [3:0] led);
+    output logic uart_tx);
 
     //-------------------------------------------------------------------------
     // USB UART
@@ -146,14 +143,14 @@ module main(
 
     // Instantiate an interface with the Ethernet PHY control signals
     EthernetPHY eth();
-    assign eth.crs     = eth_crs;
-    assign eth.mdc     = eth_mdc;
-    assign eth.mdio    = eth_mdio;
-    assign eth.ref_clk = eth_ref_clk;
-    assign eth.rstn    = eth_rstn;
-    assign eth.tx_clk  = eth_tx_clk;
-    assign eth.tx_en   = eth_tx_en;
-    assign eth.tx_d    = eth_tx_d;
+    assign eth.crs     = eth_crs;     // In
+    assign eth_mdc     = eth.mdc;     // Out
+    assign eth_mdio    = eth.mdio;    // In/Out
+    assign eth_ref_clk = eth.ref_clk; // Out
+    assign eth_rstn    = eth.rstn;    // Out
+    assign eth.tx_clk  = eth_tx_clk;  // In
+    assign eth_tx_en   = eth.tx_en;   // Out
+    assign eth_tx_d    = eth.tx_d;    // Out
 
     // The information needed to describe the source and the destination
     IPInfo ip_info;
@@ -173,11 +170,8 @@ module main(
         .data(eth_data),
         .eth(eth),
         .ip_info(ip_info),
-        .ready(led[0]),
+        .ready(/* Not connected */),
         .send(send_eth)
     );
-
-    // The rest of the LEDs are unused
-    assign led[3:1] = '0;
 
 endmodule
