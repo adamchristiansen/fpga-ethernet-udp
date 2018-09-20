@@ -248,7 +248,7 @@ module ethernet_udp_transmit #(
     localparam int unsigned IP_HEADER_NIBBLES = 2 * IP_HEADER_BYTES;
     localparam int unsigned UDP_HEADER_NIBBLES = 2 * UDP_HEADER_BYTES;
     localparam int unsigned DATA_NIBBLES = 2 * DATA_BYTES;
-    localparam int unsigned FCS_NIBBLES = 2 * DATA_BYTES;
+    localparam int unsigned FCS_NIBBLES = 2 * FCS_BYTES;
 
     // The number of nibbles send not counting the preamble and SFD.
     localparam int FRAME_NIBBLES = ETHER_HEADER_NIBBLES + IP_HEADER_NIBBLES +
@@ -371,10 +371,9 @@ module ethernet_udp_transmit #(
     //
     // where `crc` is the running CRC and `step` is the data to be added to it.
     function CRCTable crc_table();
-        // TODO Is this the right polynomial?
         localparam int unsigned POLYNOMIAL = 32'h04C11DB7;
         for (int unsigned i = 0; i < 2 ** FCS_STEP; i++) begin
-            int unsigned r = i;
+            automatic int unsigned r = i;
             // Note that j is unused and is simply a loop counter
             for (int j = 0; j < FCS_STEP; j++) begin
                 r = (r & 1) ? ((r >> 1) ^ POLYNOMIAL) : (r >> 1);
@@ -480,24 +479,27 @@ module ethernet_udp_transmit #(
                 //                             +------------------------->
                 //                                             <---------+
                 // Index:     4       5        2        3        0       1
+                // Order:     1       0        3        2        5       0
                 //
-                // These are sent from highest index to lowest.
+                // These are sent in order from highest index to lowest.
                 logic [3:0] nibble = frame[8 * (i >> 1) + 4 * ((~i) & 1)+:4];
                 // Note that this loop counts down
                 if (i >= 0) begin
                     // Only add the current byte the FCS CRC when the nibble
                     // index is before the start index of the FCS.
                     if (i >= FCS_NIBBLES) begin
-                        frame.fcs <= (frame.fcs >> FCS_STEP) &
+                        frame.fcs <= (frame.fcs << FCS_STEP) &
                             CRC_TABLE[(frame.fcs ^ i) & (2 ** FCS_STEP - 1)];
                     end
+                    // Use the updated nibble with the FCS
+                    nibble = frame[8 * (i >> 1) + 4 * ((~i) & 1)+:4];
                     // Take the one's complement of the FCS
                     eth.tx_d <= i < FCS_NIBBLES ? ~nibble : nibble;
                     i        <= i - 1;
                 end else begin
                     eth.tx_en <= 0;
                     i         <= '0;
-                    state     <= WAIT;
+                    state     <= pc config border_width       3AIT;
                 end
             end
             // Wait the appropriate time for the Ethernet interframe gap
