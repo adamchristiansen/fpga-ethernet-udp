@@ -29,7 +29,6 @@ module main(
     input logic clk,
     input logic reset,
     // Ethernet
-    input logic eth_crs,
     output logic eth_mdc,
     inout logic eth_mdio,
     output logic eth_ref_clk,
@@ -39,7 +38,9 @@ module main(
     output logic unsigned [3:0] eth_tx_d,
     // USB UART
     input logic uart_rx,
-    output logic uart_tx);
+    output logic uart_tx,
+    // Others
+    output logic [3:0] led);
 
     //-------------------------------------------------------------------------
     // USB UART
@@ -143,7 +144,6 @@ module main(
 
     // Instantiate an interface with the Ethernet PHY control signals
     EthernetPHY eth();
-    assign eth.crs     = eth_crs;     // In
     assign eth_mdc     = eth.mdc;     // Out
     assign eth_mdio    = eth.mdio;    // In/Out
     assign eth_ref_clk = eth.ref_clk; // Out
@@ -170,8 +170,11 @@ module main(
         .data(eth_data),
         .eth(eth),
         .ip_info(ip_info),
-        .ready(/* Not connected */),
+        .ready(led[0]),
         .send(send_eth)
     );
+
+    // Tie the unused LEDs to low
+    assign led[3:1] = '0;
 
 endmodule
