@@ -143,7 +143,6 @@ typedef struct packed {
 /// *   [fwd] forwards the ports while preserving the port directions to
 ///     communicate with the PHY.
 interface EthernetPHY;
-    logic crs;
     logic mdc;
     logic mdio;
     logic ref_clk;
@@ -153,7 +152,6 @@ interface EthernetPHY;
     logic unsigned [3:0] tx_d;
 
     modport fwd(
-        input crs,
         output mdc,
         inout mdio,
         output ref_clk,
@@ -427,6 +425,7 @@ module ethernet_udp_transmit #(
                 frame.ip_header.src_ip          <= ip_info.src_ip;
                 frame.ip_header.dest_ip         <= ip_info.dest_ip;
                 // Construct the UDP header
+                frame.udp_header.src_port  <= ip_info.src_port;
                 frame.udp_header.dest_port <= ip_info.dest_port;
                 frame.udp_header.length    <= UDP_BYTES;
                 frame.udp_header.checksum  <= '0; // Left as 0
@@ -453,6 +452,7 @@ module ethernet_udp_transmit #(
                     frame.ip_header[ 16+:16] +
                     frame.ip_header[  0+:16]);
                 // Others
+                i     <= '0;
                 state <= SEND_PREAMBLE_SFD;
             end
             // Send the preamble and SFD to the PHY

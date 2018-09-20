@@ -9,6 +9,7 @@ use std::fmt::Display;
 use std::io::Write;
 use std::net::UdpSocket;
 use std::result::Result;
+use std::time::Duration;
 
 mod params;
 mod test_case;
@@ -102,16 +103,19 @@ fn main() {
     }
 
     // Bind a socket to the test system
-    let socket_addr = format!("{}:{}", params.src_ip_string(), params.src_port);
+    let socket_addr = format!("{}:{}", params.dest_ip_string(), params.dest_port);
     let socket = match UdpSocket::bind(socket_addr) {
         Ok(s) => s,
         Err(err) => fatal("Could not open socket", err.to_string())
     };
+    if let Err(err) = socket.set_read_timeout(Some(Duration::new(1, 0))) {
+        fatal("Could not set socket read timeout", err.to_string())
+    }
 
     println!("{}", title.paint("Results"));
     println!("{}", title.paint("-------"));
     let mut num_failed: u64 = 0;
-    for i in 0..params.reps {
+    for i in 1..=params.reps {
         let test_case = TestCase::new(&params);
         // Run the communication
         let result: Result<(), String> = port
