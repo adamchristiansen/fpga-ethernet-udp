@@ -229,6 +229,7 @@ module ethernet_udp_transmit #(
     end
 
     // The number of bytes in parts of the frame.
+    localparam int unsigned PREAMBLE_SFD_BYTES = 8;
     localparam int unsigned ETHER_HEADER_BYTES = 14;
     localparam int unsigned IP_HEADER_BYTES = 20;
     localparam int unsigned UDP_HEADER_BYTES = 8;
@@ -241,14 +242,15 @@ module ethernet_udp_transmit #(
     // The total number of bytes in the UDP packet.
     localparam int unsigned UDP_BYTES = UDP_HEADER_BYTES + DATA_BYTES;
 
-    // The number of nibbles in parts of the frame.
+    // The number of nibbles in parts of the frame
+    localparam int unsigned PREAMBLE_SFD_NIBBLES = 2 * PREAMBLE_SFD_BYTES;
     localparam int unsigned ETHER_HEADER_NIBBLES = 2 * ETHER_HEADER_BYTES;
     localparam int unsigned IP_HEADER_NIBBLES = 2 * IP_HEADER_BYTES;
     localparam int unsigned UDP_HEADER_NIBBLES = 2 * UDP_HEADER_BYTES;
     localparam int unsigned DATA_NIBBLES = 2 * DATA_BYTES;
     localparam int unsigned FCS_NIBBLES = 2 * FCS_BYTES;
 
-    // The number of nibbles to send.
+    // The number of nibbles in the frame (not counting the preamble and SFD).
     localparam int unsigned FRAME_NIBBLES = ETHER_HEADER_NIBBLES +
         IP_HEADER_NIBBLES + UDP_HEADER_NIBBLES + DATA_NIBBLES + FCS_NIBBLES;
 
@@ -347,6 +349,7 @@ module ethernet_udp_transmit #(
         READY,
         CHECKSUM_1,
         CHECKSUM_2,
+        SEND_PREAMBLE_SFD,
         SEND_FRAME,
         WAIT
     } state;
@@ -432,8 +435,20 @@ module ethernet_udp_transmit #(
                 frame.ip_header.header_checksum <=
                     header_checksum_temp[31:16] + header_checksum_temp[15:0];
                 // Others
-                i     <= FRAME_NIBBLES - 1;
-                state <= SEND_FRAME;
+                i     <= '0;
+                state <= SEND_PREAMBLE_SFD;
+            end
+            // Send the preamble and SFD to the PHY
+            SEND_PREAMBLE_SFD: if (tx_clk_fall) begin
+                if (i < PREAMBLE_SFD_NIBBLES) begin
+                    eth.tx_d <= (i < PREAMBLE_SFD_NIBBLES - 1) ?
+                        4'b1010 : 4'b1011;
+                    eth.tx_en <= 1;
+                    i         <= i + 1;
+                end else begin
+                    i     <= FRAME_NIBBLES - 1;
+                    state <= SEND_FRAME;
+                end
             end
             // Send the frame to the PHY
             SEND_FRAME: if (tx_clk_fall) begin
@@ -442,6 +457,10 @@ module ethernet_udp_transmit #(
                 if (i >= 0) begin
                     // The transmission must be enabled.
                     eth.tx_en <= 1;
+                    // This directive expands to the indexer that is needed to
+                    // slice into the frame according to the following rules.
+                    `define NIBBLE_SLICE \
+                        8 * (i >> 1) + FCS_STEP * ((~i) & 1)+:FCS_STEP
                     // Select the current nibble. This selects nibbles
                     // according to the following diagram. Suppose there are
                     // 3 bytes, their nibble indices are like the following.
@@ -456,18 +475,21 @@ module ethernet_udp_transmit #(
                     // Order: 1       0        3        2        5       0
                     //
                     // These are sent in order from highest index to lowest.
-                    nibble = frame[8 * (i >> 1) + 4 * ((~i) & 1)+:4];
+                    nibble = frame[`NIBBLE_SLICE];
                     // Contribute the nibble to the FCS by manually doing the
                     // division
-                    for (int j = 0; j < FCS_STEP; j++) begin
-                        frame.fcs = {frame.fcs[30:0], 1'b0} ^
-                            (nibble[j] == frame.fcs[31] ? 32'h0 : POLYNOMIAL);
+                    if (i >= FCS_NIBBLES) begin
+                        for (int j = 0; j < FCS_STEP; j++) begin
+                            frame.fcs = {frame.fcs[30:0], 1'b0} ^
+                                (nibble[j] == frame.fcs[31] ? '0 : POLYNOMIAL);
+                        end
                     end
                     // Use the updated nibble with the FCS
-                    nibble = frame[8 * (i >> 1) + 4 * ((~i) & 1)+:4];
+                    nibble = frame[`NIBBLE_SLICE];
                     // Take the one's complement of the FCS
                     eth.tx_d <= i < FCS_NIBBLES ? ~nibble : nibble;
                     i        <= i - 1;
+                    `undef NIBBLE_SLICE
                 end else begin
                     eth.tx_d  <= '0;
                     eth.tx_en <= 0;
