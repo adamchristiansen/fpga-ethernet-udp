@@ -23,9 +23,9 @@
 /// *   [src_mac] is the source MAC address.
 /// *   [ether_type] indicates the protocol of the packet being sent.
 typedef struct packed {
-    logic unsigned [47:0] dest_mac;
-    logic unsigned [47:0] src_mac;
-    logic unsigned [15:0] ether_type;
+    logic [47:0] dest_mac;
+    logic [47:0] src_mac;
+    logic [15:0] ether_type;
 } EthernetHeader;
 
 /// According to RFC 791, an IP header has the following format
@@ -62,18 +62,18 @@ typedef struct packed {
 /// *   [source_ip] is the source IPv4 address.
 /// *   [dest_ip] is the destination IPv4 address.
 typedef struct packed {
-    logic unsigned [3:0] version;
-    logic unsigned [3:0] ihl;
-    logic unsigned [7:0] type_of_service;
-    logic unsigned [15:0] total_length;
-    logic unsigned [15:0] identification;
-    logic unsigned [2:0] flags;
-    logic unsigned [13:0] fragment_offset;
-    logic unsigned [7:0] time_to_live;
-    logic unsigned [7:0] protocol;
-    logic unsigned [15:0] header_checksum;
-    logic unsigned [31:0] src_ip;
-    logic unsigned [31:0] dest_ip;
+    logic [3:0] version;
+    logic [3:0] ihl;
+    logic [7:0] type_of_service;
+    logic [15:0] total_length;
+    logic [15:0] identification;
+    logic [2:0] flags;
+    logic [13:0] fragment_offset;
+    logic [7:0] time_to_live;
+    logic [7:0] protocol;
+    logic [15:0] header_checksum;
+    logic [31:0] src_ip;
+    logic [31:0] dest_ip;
 } IPHeader;
 
 /// According to RFC 768, the UDP header has the following format
@@ -92,10 +92,10 @@ typedef struct packed {
 /// *   [length] is the length of the packet in bytes inclufing this header.
 /// *   [checksum] is the UDP checksum.
 typedef struct packed {
-    logic unsigned [15:0] src_port;
-    logic unsigned [15:0] dest_port;
-    logic unsigned [15:0] length;
-    logic unsigned [15:0] checksum;
+    logic [15:0] src_port;
+    logic [15:0] dest_port;
+    logic [15:0] length;
+    logic [15:0] checksum;
 } UDPHeader;
 
 /// Holds the values needed to describe the source and destination of an IP
@@ -110,12 +110,12 @@ typedef struct packed {
 /// *   [dest_mac] is the destination MAC address.
 /// *   [dest_port] is the destination port number.
 typedef struct packed {
-    logic unsigned [31:0] src_ip;
-    logic unsigned [47:0] src_mac;
-    logic unsigned [15:0] src_port;
-    logic unsigned [31:0] dest_ip;
-    logic unsigned [47:0] dest_mac;
-    logic unsigned [15:0] dest_port;
+    logic [31:0] src_ip;
+    logic [47:0] src_mac;
+    logic [15:0] src_port;
+    logic [31:0] dest_ip;
+    logic [47:0] dest_mac;
+    logic [15:0] dest_port;
 } IPInfo;
 
 /// Holds the signals that control the Ethernet PHY.
@@ -149,7 +149,7 @@ interface EthernetPHY;
     logic rstn;
     logic tx_clk;
     logic tx_en;
-    logic unsigned [3:0] tx_d;
+    logic [3:0] tx_d;
 
     modport fwd(
         output mdc,
@@ -207,7 +207,7 @@ module ethernet_udp_transmit #(
     input logic clk,
     input logic reset,
     // Ethernet
-    input logic unsigned [8*DATA_BYTES-1:0] data,
+    input logic [8*DATA_BYTES-1:0] data,
     EthernetPHY.fwd eth,
     input IPInfo ip_info,
     output logic ready,
@@ -229,7 +229,6 @@ module ethernet_udp_transmit #(
     end
 
     // The number of bytes in parts of the frame.
-    localparam int unsigned PREAMBLE_SFD_BYTES = 8;
     localparam int unsigned ETHER_HEADER_BYTES = 14;
     localparam int unsigned IP_HEADER_BYTES = 20;
     localparam int unsigned UDP_HEADER_BYTES = 8;
@@ -243,20 +242,19 @@ module ethernet_udp_transmit #(
     localparam int unsigned UDP_BYTES = UDP_HEADER_BYTES + DATA_BYTES;
 
     // The number of nibbles in parts of the frame.
-    localparam int unsigned PREAMBLE_SFD_NIBBLES = 2 * PREAMBLE_SFD_BYTES;
     localparam int unsigned ETHER_HEADER_NIBBLES = 2 * ETHER_HEADER_BYTES;
     localparam int unsigned IP_HEADER_NIBBLES = 2 * IP_HEADER_BYTES;
     localparam int unsigned UDP_HEADER_NIBBLES = 2 * UDP_HEADER_BYTES;
     localparam int unsigned DATA_NIBBLES = 2 * DATA_BYTES;
     localparam int unsigned FCS_NIBBLES = 2 * FCS_BYTES;
 
-    // The number of nibbles send not counting the preamble and SFD.
-    localparam int FRAME_NIBBLES = ETHER_HEADER_NIBBLES + IP_HEADER_NIBBLES +
-        UDP_HEADER_NIBBLES + DATA_NIBBLES + FCS_NIBBLES;
+    // The number of nibbles to send.
+    localparam int unsigned FRAME_NIBBLES = ETHER_HEADER_NIBBLES +
+        IP_HEADER_NIBBLES + UDP_HEADER_NIBBLES + DATA_NIBBLES + FCS_NIBBLES;
 
     // The number of write cycles to wait after sending after writing data to
     // the PHY. This must be at least 12 bytes worth of time.
-    localparam int unsigned GAP_NIBBLES = 24;
+    localparam int unsigned GAP_NIBBLES = 40;
 
     // The Ethernet type for the Ethernet header. This value indicates that
     // IPv4 is used.
@@ -292,7 +290,7 @@ module ethernet_udp_transmit #(
         IPHeader ip_header;
         UDPHeader udp_header;
         logic [8*DATA_BYTES-1:0] data;
-        logic [15:0] fcs;
+        logic [31:0] fcs;
     } frame;
 
     // Generate the clock signal to transmit on.
@@ -347,8 +345,8 @@ module ethernet_udp_transmit #(
     // the data to the PHY.
     enum {
         READY,
-        CHECKSUM,
-        SEND_PREAMBLE_SFD,
+        CHECKSUM_1,
+        CHECKSUM_2,
         SEND_FRAME,
         WAIT
     } state;
@@ -356,38 +354,16 @@ module ethernet_udp_transmit #(
     // The number of bits to contribute to the FCS on each round.
     localparam int unsigned FCS_STEP = 4;
 
-    // The type of the CRC table to generate.
-    typedef int unsigned CRCTable [2**FCS_STEP-1:0];
-
-    // Generate a CRC table with 16 entrie. This can then be applied in rounds
-    // with a data size FCS_STEP.
-    //
-    // This is a precomputed table of the CRC values with round sizes of width
-    // FCS_STEP bits. These values are applied to a running CRC value with
-    //
-    // ```
-    // crc <- (crc >> FCS_WIDTH) & CRC_TABLE[(crc & step) (2 ** FCS_STEP - 1)]
-    // ```
-    //
-    // where `crc` is the running CRC and `step` is the data to be added to it.
-    function CRCTable crc_table();
-        localparam int unsigned POLYNOMIAL = 32'h04C11DB7;
-        for (int unsigned i = 0; i < 2 ** FCS_STEP; i++) begin
-            automatic int unsigned r = i;
-            // Note that j is unused and is simply a loop counter
-            for (int j = 0; j < FCS_STEP; j++) begin
-                r = (r & 1) ? ((r >> 1) ^ POLYNOMIAL) : (r >> 1);
-            end
-            crc_table[i] = r;
-        end
-    endfunction
-
-    // The CRC to use for computing the FCS.
-    localparam CRCTable CRC_TABLE = crc_table();
+    // The polynomial used to compute the FCS.
+    localparam int unsigned POLYNOMIAL = 32'h04C11DB7;
 
     // This is used as a general purpose counter. Note that this is signed
     // because it is used to count up and down.
     int i;
+
+    // This value is used as a temporary value in an intermediate step for
+    // computing the IP header checksum.
+    int unsigned header_checksum_temp;
 
     // Run the state machine that sends that data to the PHY.
     always_ff @(posedge clk) begin
@@ -434,62 +410,58 @@ module ethernet_udp_transmit #(
                 frame.fcs <= 32'hFFFFFFFF;
                 // Others
                 ready <= 0;
-                state <= CHECKSUM;
+                state <= CHECKSUM_1;
             end
-            // Compute some checksums
-            CHECKSUM: begin
-                // Compute the IP header checksum
-                frame.ip_header.header_checksum <= ~(
-                    frame.ip_header[144+:16] +
-                    frame.ip_header[128+:16] +
-                    frame.ip_header[112+:16] +
-                    frame.ip_header[ 96+:16] +
-                    frame.ip_header[ 80+:16] +
-                    frame.ip_header[ 64+:16] +
-                    frame.ip_header[ 48+:16] +
-                    frame.ip_header[ 32+:16] +
-                    frame.ip_header[ 16+:16] +
-                    frame.ip_header[  0+:16]);
+            // Compute the IP header checksum
+            CHECKSUM_1: begin
+                header_checksum_temp <=
+                    frame.ip_header[144+:16] + // Version, IHL, ToS
+                    frame.ip_header[128+:16] + // Total length
+                    frame.ip_header[112+:16] + // Identification
+                    frame.ip_header[ 96+:16] + // Flags, Fragmentation offset
+                    frame.ip_header[ 80+:16] + // TTL, Protocol
+                    // frame.ip_header[ 64+:16] + // Header checksum
+                    frame.ip_header[ 48+:16] + // Source IP Upper
+                    frame.ip_header[ 32+:16] + // Source IP Lower
+                    frame.ip_header[ 16+:16] + // Destination IP Upper
+                    frame.ip_header[  0+:16];  // Destination IP Lower
                 // Others
-                i     <= '0;
-                state <= SEND_PREAMBLE_SFD;
+                state <= CHECKSUM_2;
             end
-            // Send the preamble and SFD to the PHY
-            SEND_PREAMBLE_SFD: if (tx_clk_fall) begin
-                if (i < PREAMBLE_SFD_NIBBLES) begin
-                    eth.tx_d <= (i < PREAMBLE_SFD_NIBBLES - 1) ?
-                        4'b1010 : 4'b1011;
-                    eth.tx_en <= 1;
-                    i         <= i + 1;
-                end else begin
-                    i     <= FRAME_NIBBLES - 1;
-                    state <= SEND_FRAME;
-                end
+            CHECKSUM_2: begin
+                frame.ip_header.header_checksum <=
+                    header_checksum_temp[31:16] + header_checksum_temp[15:0];
+                // Others
+                i     <= FRAME_NIBBLES - 1;
+                state <= SEND_FRAME;
             end
             // Send the frame to the PHY
             SEND_FRAME: if (tx_clk_fall) begin
-                // Select the current nibble. This selects nibbles according to
-                // the following diagram. Suppose there are 3 bytes, their
-                // nibble indices are like the following.
-                //
-                //          23:20    19:16   15:12    11:8      7:4     3:0
-                //            <--------+
-                //            +------------------------->
-                //                             <--------+
-                //                             +------------------------->
-                //                                             <---------+
-                // Index:     4       5        2        3        0       1
-                // Order:     1       0        3        2        5       0
-                //
-                // These are sent in order from highest index to lowest.
-                logic [3:0] nibble = frame[8 * (i >> 1) + 4 * ((~i) & 1)+:4];
+                automatic logic [3:0] nibble;
                 // Note that this loop counts down
                 if (i >= 0) begin
-                    // Only add the current byte the FCS CRC when the nibble
-                    // index is before the start index of the FCS.
-                    if (i >= FCS_NIBBLES) begin
-                        frame.fcs <= (frame.fcs << FCS_STEP) &
-                            CRC_TABLE[(frame.fcs ^ i) & (2 ** FCS_STEP - 1)];
+                    // The transmission must be enabled.
+                    eth.tx_en <= 1;
+                    // Select the current nibble. This selects nibbles
+                    // according to the following diagram. Suppose there are
+                    // 3 bytes, their nibble indices are like the following.
+                    //
+                    //      23:20    19:16   15:12    11:8      7:4     3:0
+                    //        <--------+
+                    //        +------------------------->
+                    //                         <--------+
+                    //                         +------------------------->
+                    //                                         <---------+
+                    // Index: 4       5        2        3        0       1
+                    // Order: 1       0        3        2        5       0
+                    //
+                    // These are sent in order from highest index to lowest.
+                    nibble = frame[8 * (i >> 1) + 4 * ((~i) & 1)+:4];
+                    // Contribute the nibble to the FCS by manually doing the
+                    // division
+                    for (int j = 0; j < FCS_STEP; j++) begin
+                        frame.fcs = {frame.fcs[30:0], 1'b0} ^
+                            (nibble[j] == frame.fcs[31] ? 32'h0 : POLYNOMIAL);
                     end
                     // Use the updated nibble with the FCS
                     nibble = frame[8 * (i >> 1) + 4 * ((~i) & 1)+:4];
@@ -497,9 +469,10 @@ module ethernet_udp_transmit #(
                     eth.tx_d <= i < FCS_NIBBLES ? ~nibble : nibble;
                     i        <= i - 1;
                 end else begin
+                    eth.tx_d  <= '0;
                     eth.tx_en <= 0;
                     i         <= '0;
-                    state     <= pc config border_width       3AIT;
+                    state     <= WAIT;
                 end
             end
             // Wait the appropriate time for the Ethernet interframe gap
