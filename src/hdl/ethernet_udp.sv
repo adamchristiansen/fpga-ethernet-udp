@@ -68,7 +68,7 @@ typedef struct packed {
     logic [15:0] total_length;
     logic [15:0] identification;
     logic [2:0] flags;
-    logic [13:0] fragment_offset;
+    logic [12:0] fragment_offset;
     logic [7:0] time_to_live;
     logic [7:0] protocol;
     logic [15:0] header_checksum;
@@ -185,6 +185,12 @@ endinterface
 ///     Ethernet PHY. The divider must be large enough so that the produced
 ///     clock is no faster than 25MHz (which is the max speed supported by the
 ///     10/100 PHY).
+/// *   [POWER_UP_CYCLES] is the number of clock cycles to wait at power up
+///     before the PHY is ready. This must be at least 167 ms worth of time.
+///     The default value is set appropriately for a 100 MHz [clk]. Setting
+///     this to 0 or a negative number disables the wait at powerup, but the
+///     PHY will not be initialized properly. Disabling the startup check is
+///     only really useful in simulation.
 ///
 /// # Ports
 ///
@@ -202,7 +208,8 @@ endinterface
 /// *   [send] signal rises.
 module ethernet_udp_transmit #(
     parameter int DATA_BYTES = 0,
-    parameter int DIVIDER = 0) (
+    parameter int DIVIDER = 0,
+    parameter int POWER_UP_CYCLES = 17_000_000) (
     // Standard
     input logic clk,
     input logic reset,
@@ -346,6 +353,7 @@ module ethernet_udp_transmit #(
     // This enum is used to track the progress of a state machine that writes
     // the data to the PHY.
     enum {
+        POWER_UP,
         READY,
         CHECKSUM_1,
         CHECKSUM_2,
@@ -376,13 +384,24 @@ module ethernet_udp_transmit #(
             eth.tx_en <= 0;
             frame     <= '0;
             i         <= '0;
-            ready     <= 1;
-            state     <= READY;
+            ready     <= 0;
+            state     <= POWER_UP;
         end else begin
             // No longer need to reset
             eth.rstn <= 1;
             // Run the state machine for what to send
             case (state)
+            // The PHY is powering up
+            POWER_UP: begin
+                // Wait for the PHY to properly power up
+                if (i < POWER_UP_CYCLES) begin
+                    i <= i + 1;
+                end else begin
+                    i     <= '0;
+                    ready <= 1;
+                    state <= READY;
+                end
+            end
             // Latch the data
             READY: if (!send_prev && send) begin
                 // Construct the Ethernet header
@@ -441,8 +460,11 @@ module ethernet_udp_transmit #(
             // Send the preamble and SFD to the PHY
             SEND_PREAMBLE_SFD: if (tx_clk_fall) begin
                 if (i < PREAMBLE_SFD_NIBBLES) begin
+                    // TODO Note that these are reversed
                     eth.tx_d <= (i < PREAMBLE_SFD_NIBBLES - 1) ?
-                        4'b1010 : 4'b1011;
+                        4'b0101 : 4'b1101;
+                    // TODO Should this be enabled here or when the actual
+                    // packet data gets sent?
                     eth.tx_en <= 1;
                     i         <= i + 1;
                 end else begin
@@ -486,8 +508,15 @@ module ethernet_udp_transmit #(
                     end
                     // Use the updated nibble with the FCS
                     nibble = frame[`NIBBLE_SLICE];
+                    // One's complement the nibble if it is the FCS
+                    nibble = i < FCS_NIBBLES ? ~nibble : nibble;
+                    // Reverse the nibble
+                    nibble = i < FCS_NIBBLES
+                        ? {nibble[0], nibble[1], nibble[2], nibble[3]}
+                        : nibble;
+                    //TODO nibble = {nibble[0], nibble[1], nibble[2], nibble[3]};
                     // Take the one's complement of the FCS
-                    eth.tx_d <= i < FCS_NIBBLES ? ~nibble : nibble;
+                    eth.tx_d <= nibble;
                     i        <= i - 1;
                     `undef NIBBLE_SLICE
                 end else begin
@@ -495,6 +524,14 @@ module ethernet_udp_transmit #(
                     eth.tx_en <= 0;
                     i         <= '0;
                     state     <= WAIT;
+                    $display("---- BEGIN FRAME ----");
+                    $display("%h", frame);
+                    $display("---- END FRAME ----");
+                    $display("Ethernet Header: %h", frame.eth_header);
+                    $display("IP Header:       %h", frame.ip_header);
+                    $display("UDP Header:      %h", frame.udp_header);
+                    $display("Data:            %h", frame.data);
+                    $display("FCS:             %h", frame.fcs);
                 end
             end
             // Wait the appropriate time for the Ethernet interframe gap
