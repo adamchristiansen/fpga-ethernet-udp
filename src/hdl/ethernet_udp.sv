@@ -242,12 +242,16 @@ module ethernet_udp_transmit #(
     localparam int unsigned UDP_HEADER_BYTES = 8;
     localparam int unsigned FCS_BYTES = 4;
 
-    // The total number of bytes in the IP packet.
-    localparam int unsigned IP_BYTES =
-        IP_HEADER_BYTES + UDP_HEADER_BYTES + DATA_BYTES;
-
     // The total number of bytes in the UDP packet.
     localparam int unsigned UDP_BYTES = UDP_HEADER_BYTES + DATA_BYTES;
+
+    // The total number of bytes in the IP packet.
+    localparam int unsigned IP_BYTES = IP_HEADER_BYTES + UDP_BYTES;
+
+    // The number of bytes that need to be added to frame so that it is
+    // a multiple of 4 bytes long. This is added between the data and the FCS.
+    localparam int unsigned PAD_BYTES =
+        (4 - ((MAC_HEADER_BYTES + IP_BYTES) % 4)) % 4;
 
     // The number of nibbles in parts of the frame
     localparam int unsigned PREAMBLE_SFD_NIBBLES = 2 * PREAMBLE_SFD_BYTES;
@@ -255,11 +259,13 @@ module ethernet_udp_transmit #(
     localparam int unsigned IP_HEADER_NIBBLES = 2 * IP_HEADER_BYTES;
     localparam int unsigned UDP_HEADER_NIBBLES = 2 * UDP_HEADER_BYTES;
     localparam int unsigned DATA_NIBBLES = 2 * DATA_BYTES;
+    localparam int unsigned PAD_NIBBLES = 2 * PAD_BYTES;
     localparam int unsigned FCS_NIBBLES = 2 * FCS_BYTES;
 
     // The number of nibbles in the frame (not counting the preamble and SFD).
     localparam int unsigned FRAME_NIBBLES = MAC_HEADER_NIBBLES +
-        IP_HEADER_NIBBLES + UDP_HEADER_NIBBLES + DATA_NIBBLES + FCS_NIBBLES;
+        IP_HEADER_NIBBLES + UDP_HEADER_NIBBLES + DATA_NIBBLES + PAD_NIBBLES +
+        FCS_NIBBLES;
 
     // The number of write cycles to wait after sending after writing data to
     // the PHY. This must be at least 12 bytes worth of time.
@@ -293,12 +299,13 @@ module ethernet_udp_transmit #(
     // The IP next level protocol to use. This is the User Datagram Protocol.
     localparam int unsigned IP_PROTOCOL = 8'h11;
 
-    // This structure represents a frame to be sent.
+    // This structure represents a frame to be sent. The padding bytes are
+    // added to the data section of the packet.
     struct packed {
         MACHeader mac_header;
         IPHeader ip_header;
         UDPHeader udp_header;
-        logic [8*DATA_BYTES-1:0] data;
+        logic [8*(DATA_BYTES+PAD_BYTES)-1:0] data;
         logic [31:0] fcs;
     } frame;
 
@@ -426,8 +433,11 @@ module ethernet_udp_transmit #(
                 frame.udp_header.dest_port <= ip_info.dest_port;
                 frame.udp_header.length    <= UDP_BYTES;
                 frame.udp_header.checksum  <= '0; // Left as 0
-                // Add the data to the frame
-                frame.data <= data;
+                // Add the data to the frame and zero the padding bytes
+                frame.data[8*(DATA_BYTES+PAD_BYTES)-1:8*PAD_BYTES] <= data;
+                if (PAD_BYTES > 0) begin
+                    frame.data[8*PAD_BYTES-1:0] <= '0;
+                end
                 // The CRC starts as all 1's
                 frame.fcs <= 32'hFFFFFFFF;
                 // Others
@@ -527,11 +537,6 @@ module ethernet_udp_transmit #(
                     $display("---- BEGIN FRAME ----");
                     $display("%h", frame);
                     $display("---- END FRAME ----");
-                    $display("MAC Header: %h", frame.mac_header);
-                    $display("IP Header:  %h", frame.ip_header);
-                    $display("UDP Header: %h", frame.udp_header);
-                    $display("Data:       %h", frame.data);
-                    $display("FCS:        %h", frame.fcs);
                 end
             end
             // Wait the appropriate time for the Ethernet interframe gap
