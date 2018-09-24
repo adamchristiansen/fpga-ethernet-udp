@@ -26,7 +26,7 @@ typedef struct packed {
     logic [47:0] dest_mac;
     logic [47:0] src_mac;
     logic [15:0] ether_type;
-} EthernetHeader;
+} MACHeader;
 
 /// According to RFC 791, an IP header has the following format
 ///
@@ -237,7 +237,7 @@ module ethernet_udp_transmit #(
 
     // The number of bytes in parts of the frame.
     localparam int unsigned PREAMBLE_SFD_BYTES = 8;
-    localparam int unsigned ETHER_HEADER_BYTES = 14;
+    localparam int unsigned MAC_HEADER_BYTES = 14;
     localparam int unsigned IP_HEADER_BYTES = 20;
     localparam int unsigned UDP_HEADER_BYTES = 8;
     localparam int unsigned FCS_BYTES = 4;
@@ -251,14 +251,14 @@ module ethernet_udp_transmit #(
 
     // The number of nibbles in parts of the frame
     localparam int unsigned PREAMBLE_SFD_NIBBLES = 2 * PREAMBLE_SFD_BYTES;
-    localparam int unsigned ETHER_HEADER_NIBBLES = 2 * ETHER_HEADER_BYTES;
+    localparam int unsigned MAC_HEADER_NIBBLES = 2 * MAC_HEADER_BYTES;
     localparam int unsigned IP_HEADER_NIBBLES = 2 * IP_HEADER_BYTES;
     localparam int unsigned UDP_HEADER_NIBBLES = 2 * UDP_HEADER_BYTES;
     localparam int unsigned DATA_NIBBLES = 2 * DATA_BYTES;
     localparam int unsigned FCS_NIBBLES = 2 * FCS_BYTES;
 
     // The number of nibbles in the frame (not counting the preamble and SFD).
-    localparam int unsigned FRAME_NIBBLES = ETHER_HEADER_NIBBLES +
+    localparam int unsigned FRAME_NIBBLES = MAC_HEADER_NIBBLES +
         IP_HEADER_NIBBLES + UDP_HEADER_NIBBLES + DATA_NIBBLES + FCS_NIBBLES;
 
     // The number of write cycles to wait after sending after writing data to
@@ -295,7 +295,7 @@ module ethernet_udp_transmit #(
 
     // This structure represents a frame to be sent.
     struct packed {
-        EthernetHeader eth_header;
+        MACHeader mac_header;
         IPHeader ip_header;
         UDPHeader udp_header;
         logic [8*DATA_BYTES-1:0] data;
@@ -405,9 +405,9 @@ module ethernet_udp_transmit #(
             // Latch the data
             READY: if (!send_prev && send) begin
                 // Construct the Ethernet header
-                frame.eth_header.dest_mac   <= ip_info.dest_mac;
-                frame.eth_header.src_mac    <= ip_info.src_mac;
-                frame.eth_header.ether_type <= ETHER_TYPE;
+                frame.mac_header.dest_mac   <= ip_info.dest_mac;
+                frame.mac_header.src_mac    <= ip_info.src_mac;
+                frame.mac_header.ether_type <= ETHER_TYPE;
                 // Construct the IP header
                 frame.ip_header.version         <= IP_VERSION;
                 frame.ip_header.ihl             <= IP_IHL;
@@ -527,11 +527,11 @@ module ethernet_udp_transmit #(
                     $display("---- BEGIN FRAME ----");
                     $display("%h", frame);
                     $display("---- END FRAME ----");
-                    $display("Ethernet Header: %h", frame.eth_header);
-                    $display("IP Header:       %h", frame.ip_header);
-                    $display("UDP Header:      %h", frame.udp_header);
-                    $display("Data:            %h", frame.data);
-                    $display("FCS:             %h", frame.fcs);
+                    $display("MAC Header: %h", frame.mac_header);
+                    $display("IP Header:  %h", frame.ip_header);
+                    $display("UDP Header: %h", frame.udp_header);
+                    $display("Data:       %h", frame.data);
+                    $display("FCS:        %h", frame.fcs);
                 end
             end
             // Wait the appropriate time for the Ethernet interframe gap
