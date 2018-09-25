@@ -489,10 +489,6 @@ module ethernet_udp_transmit #(
                 if (i >= 0) begin
                     // The transmission must be enabled.
                     eth.tx_en <= 1;
-                    // This directive expands to the indexer that is needed to
-                    // slice into the frame according to the following rules.
-                    `define NIBBLE_SLICE \
-                        8 * (i >> 1) + FCS_STEP * ((~i) & 1)+:FCS_STEP
                     // Select the current nibble. This selects nibbles
                     // according to the following diagram. Suppose there are
                     // 3 bytes, their nibble indices are like the following.
@@ -504,31 +500,78 @@ module ethernet_udp_transmit #(
                     //                         +------------------------->
                     //                                         <---------+
                     // Index: 4       5        2        3        0       1
-                    // Order: 1       0        3        2        5       0
+                    // Order: 1       0        3        2        5       4
                     //
                     // These are sent in order from highest index to lowest.
-                    nibble = frame[`NIBBLE_SLICE];
+                    // This directive expands to the indexer that will be used
+                    // for this.
+                    `define SLICE \
+                        8 * (i >> 1) + FCS_STEP * ((~i) & 1)+:FCS_STEP
                     // Contribute the nibble to the FCS by manually doing the
                     // division
                     if (i >= FCS_NIBBLES) begin
-                        for (int j = 0; j < FCS_STEP; j++) begin
+                        // Get the current nibble
+                        nibble = frame[`SLICE];
+                        // Run the CRC algorithm
+                        for (int j = 0; j < 4; j++) begin
                             frame.fcs = {frame.fcs[30:0], 1'b0} ^
                                 (nibble[j] == frame.fcs[31] ? '0 : POLYNOMIAL);
                         end
+                        // Get the updated nibble
+                        nibble = frame[`SLICE];
+                        // TODO Remove this
+                        // The nibbles of each byte in the FCS must be swapped
+                        // when the FCS has been computed
+                        /*
+                        if (i == FCS_NIBBLES) begin
+                            frame.fcs[28+:4] <= frame.fcs[24+:4];
+                            frame.fcs[24+:4] <= frame.fcs[28+:4];
+                            frame.fcs[20+:4] <= frame.fcs[16+:4];
+                            frame.fcs[16+:4] <= frame.fcs[20+:4];
+                            frame.fcs[12+:4] <= frame.fcs[8+:4];
+                            frame.fcs[8+:4]  <= frame.fcs[12+:4];
+                            frame.fcs[4+:4]  <= frame.fcs[0+:4];
+                            frame.fcs[0+:4]  <= frame.fcs[4+:4];
+                        end
+                        */
+                    end else begin
+                        // The FCS has been computed and these remaining
+                        // nibbles are the nibbles of the FCS.
+
+                        // The nibbles in each byte must be swapped. This is
+                        // done procedurally so that the nibbles are updated
+                        // before they are used. This is only done the first
+                        // time this block is entered.
+                        if (i == FCS_NIBBLES - 1) begin
+                            // Make copies of the upper nibbles of each byte
+                            automatic logic [3:0] t3 = frame.fcs[28+:4];
+                            automatic logic [3:0] t2 = frame.fcs[20+:4];
+                            automatic logic [3:0] t1 = frame.fcs[12+:4];
+                            automatic logic [3:0] t0 = frame.fcs[4+:4];
+                            // Assign the lower nibbles to the upper nibbles
+                            // before writing the copy of the upper nibble to
+                            // the lower nibble
+                            frame.fcs[28+:4] = frame.fcs[24+:4];
+                            frame.fcs[24+:4] = t3;
+                            frame.fcs[20+:4] = frame.fcs[16+:4];
+                            frame.fcs[16+:4] = t2;
+                            frame.fcs[12+:4] = frame.fcs[8+:4];
+                            frame.fcs[8+:4]  = t1;
+                            frame.fcs[4+:4]  = frame.fcs[0+:4];
+                            frame.fcs[0+:4]  = t0;
+                        end
+                        // Get the current nibble and take the one's
+                        // complement, then reverse the order of the bits
+                        nibble = {<<bit{~frame[`SLICE]}};
+                        // Assign the nibble back to the frame. This can be
+                        // combinational because it is not read in the sale
+                        // clock cycle
+                        frame[`SLICE] <= nibble;
                     end
-                    // Use the updated nibble with the FCS
-                    nibble = frame[`NIBBLE_SLICE];
-                    // One's complement the nibble if it is the FCS
-                    nibble = i < FCS_NIBBLES ? ~nibble : nibble;
-                    // Reverse the nibble
-                    nibble = i < FCS_NIBBLES
-                        ? {nibble[0], nibble[1], nibble[2], nibble[3]}
-                        : nibble;
-                    //TODO nibble = {nibble[0], nibble[1], nibble[2], nibble[3]};
-                    // Take the one's complement of the FCS
+                    // Send the nibble
                     eth.tx_d <= nibble;
                     i        <= i - 1;
-                    `undef NIBBLE_SLICE
+                    `undef SLICE
                 end else begin
                     eth.tx_d  <= '0;
                     eth.tx_en <= 0;
