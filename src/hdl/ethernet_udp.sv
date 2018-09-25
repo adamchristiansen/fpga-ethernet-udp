@@ -372,8 +372,23 @@ module ethernet_udp_transmit #(
     // The number of bits to contribute to the FCS on each round.
     localparam int unsigned FCS_STEP = 4;
 
-    // The polynomial used to compute the FCS.
-    localparam int unsigned POLYNOMIAL = 32'h04C11DB7;
+    // Computes one step of the CRC-32 algorithm from the previous CRC value.
+    //
+    // # Arguments
+    //
+    // * [crc] is the previous CRC value.
+    // * [data] is the data to contribute to the CRC.
+    //
+    // # Returns
+    //
+    // The next CRC value.
+    function logic [31:0] compute_crc(logic [31:0] crc, logic [FCS_STEP-1:0] data);
+        localparam int unsigned POLYNOMIAL = 32'h04C11DB7;
+        compute_crc = crc;
+        for (int j = 0; j < FCS_STEP; j++) begin
+            compute_crc = {compute_crc[30:0], 1'b0} ^ (data[j] == compute_crc[31] ? '0 : POLYNOMIAL);
+        end
+    endfunction
 
     // This is used as a general purpose counter. Note that this is signed
     // because it is used to count up and down.
@@ -484,7 +499,6 @@ module ethernet_udp_transmit #(
             end
             // Send the frame to the PHY
             SEND_FRAME: if (tx_clk_fall) begin
-                automatic logic [3:0] nibble;
                 // Note that this loop counts down
                 if (i >= 0) begin
                     // The transmission must be enabled.
@@ -510,67 +524,25 @@ module ethernet_udp_transmit #(
                     // Contribute the nibble to the FCS by manually doing the
                     // division
                     if (i >= FCS_NIBBLES) begin
-                        // Get the current nibble
-                        nibble = frame[`SLICE];
-                        // Run the CRC algorithm
-                        for (int j = 0; j < 4; j++) begin
-                            frame.fcs = {frame.fcs[30:0], 1'b0} ^
-                                (nibble[j] == frame.fcs[31] ? '0 : POLYNOMIAL);
-                        end
-                        // Get the updated nibble
-                        nibble = frame[`SLICE];
-                        // TODO Remove this
-                        // The nibbles of each byte in the FCS must be swapped
-                        // when the FCS has been computed
-                        /*
-                        if (i == FCS_NIBBLES) begin
-                            frame.fcs[28+:4] <= frame.fcs[24+:4];
-                            frame.fcs[24+:4] <= frame.fcs[28+:4];
-                            frame.fcs[20+:4] <= frame.fcs[16+:4];
-                            frame.fcs[16+:4] <= frame.fcs[20+:4];
-                            frame.fcs[12+:4] <= frame.fcs[8+:4];
-                            frame.fcs[8+:4]  <= frame.fcs[12+:4];
-                            frame.fcs[4+:4]  <= frame.fcs[0+:4];
-                            frame.fcs[0+:4]  <= frame.fcs[4+:4];
-                        end
-                        */
+                        // Contribute the nibble to the CRC
+                        frame.fcs <= compute_crc(frame.fcs, frame[`SLICE]);
+                        // Send the nibble
+                        eth.tx_d <= frame[`SLICE];
                     end else begin
                         // The FCS has been computed and these remaining
                         // nibbles are the nibbles of the FCS.
 
-                        // The nibbles in each byte must be swapped. This is
-                        // done procedurally so that the nibbles are updated
-                        // before they are used. This is only done the first
-                        // time this block is entered.
-                        if (i == FCS_NIBBLES - 1) begin
-                            // Make copies of the upper nibbles of each byte
-                            automatic logic [3:0] t3 = frame.fcs[28+:4];
-                            automatic logic [3:0] t2 = frame.fcs[20+:4];
-                            automatic logic [3:0] t1 = frame.fcs[12+:4];
-                            automatic logic [3:0] t0 = frame.fcs[4+:4];
-                            // Assign the lower nibbles to the upper nibbles
-                            // before writing the copy of the upper nibble to
-                            // the lower nibble
-                            frame.fcs[28+:4] = frame.fcs[24+:4];
-                            frame.fcs[24+:4] = t3;
-                            frame.fcs[20+:4] = frame.fcs[16+:4];
-                            frame.fcs[16+:4] = t2;
-                            frame.fcs[12+:4] = frame.fcs[8+:4];
-                            frame.fcs[8+:4]  = t1;
-                            frame.fcs[4+:4]  = frame.fcs[0+:4];
-                            frame.fcs[0+:4]  = t0;
-                        end
                         // Get the current nibble and take the one's
-                        // complement, then reverse the order of the bits
-                        nibble = {<<bit{~frame[`SLICE]}};
-                        // Assign the nibble back to the frame. This can be
-                        // combinational because it is not read in the sale
-                        // clock cycle
-                        frame[`SLICE] <= nibble;
+                        // complement, then reverse the order of the bits,
+                        // then send the new nibble
+                        eth.tx_d <= {<<bit{~frame[`SLICE]}};
+                        // Assign the reversed bits back to the frame. This is
+                        // only really useful for the simulator since these
+                        // bits are not read again.
+                        frame[`SLICE] <= {<<bit{~frame[`SLICE]}};
                     end
-                    // Send the nibble
-                    eth.tx_d <= nibble;
-                    i        <= i - 1;
+                    // Others
+                    i <= i - 1;
                     `undef SLICE
                 end else begin
                     eth.tx_d  <= '0;
@@ -580,6 +552,23 @@ module ethernet_udp_transmit #(
                     $display("---- BEGIN FRAME ----");
                     $display("%h", frame);
                     $display("---- END FRAME ----");
+                end
+            end else if (tx_clk_rise) begin
+                // The nibbles in each byte of the FCS must be swapped. This
+                // is done after the FCS is computed and the clock rises. This
+                // leverages the fact that the clock can be loaded on both
+                // edges since the fall is always used to write.
+                if (i == FCS_NIBBLES - 1) begin
+                    // Assign the lower nibbles to the upper nibbles and the
+                    // upper nibbles to the lower nibbles
+                    frame.fcs[28+:4] <= frame.fcs[24+:4];
+                    frame.fcs[24+:4] <= frame.fcs[28+:4];
+                    frame.fcs[20+:4] <= frame.fcs[16+:4];
+                    frame.fcs[16+:4] <= frame.fcs[20+:4];
+                    frame.fcs[12+:4] <= frame.fcs[8+:4];
+                    frame.fcs[8+:4]  <= frame.fcs[12+:4];
+                    frame.fcs[4+:4]  <= frame.fcs[0+:4];
+                    frame.fcs[0+:4]  <= frame.fcs[4+:4];
                 end
             end
             // Wait the appropriate time for the Ethernet interframe gap
