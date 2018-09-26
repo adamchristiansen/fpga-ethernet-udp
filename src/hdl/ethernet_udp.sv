@@ -515,17 +515,19 @@ module ethernet_udp_transmit #(
                 state <= SEND_PREAMBLE_SFD;
             end
             // Send the preamble and SFD to the PHY
-            SEND_PREAMBLE_SFD: if (i < PREAMBLE_SFD_NIBBLES) begin
+            SEND_PREAMBLE_SFD: begin
                 // TODO Note that these are reversed
                 eth.tx_d <= (i < PREAMBLE_SFD_NIBBLES - 1) ?
                     4'b0101 : 4'b1101;
                 // TODO Should this be enabled here or when the actual
                 //      packet data gets sent?
                 eth.tx_en <= 1;
-                i         <= i + 1;
-            end else begin
-                i     <= FRAME_NIBBLES - 1;
-                state <= SEND_FRAME;
+                if (i < PREAMBLE_SFD_NIBBLES - 1) begin
+                    i <= i + 1;
+                end else begin
+                    i     <= FRAME_NIBBLES - 1;
+                    state <= SEND_FRAME;
+                end
             end
             // Send the frame to the PHY. Note that this loop counts down
             SEND_FRAME: if (i >= 0) begin
