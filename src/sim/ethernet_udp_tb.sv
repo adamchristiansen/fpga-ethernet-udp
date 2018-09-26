@@ -27,7 +27,7 @@ module ethernet_udp_tb();
     logic eth_mdio;
     logic eth_ref_clk;
     logic eth_rstn;
-    logic eth_tx_clk = 0;
+    logic eth_tx_clk;
     logic eth_tx_en;
     logic [3:0] eth_tx_d;
     assign eth_mdc     = eth.mdc;     // Out
@@ -37,9 +37,8 @@ module ethernet_udp_tb();
     assign eth.tx_clk  = eth_tx_clk;  // In
     assign eth_tx_en   = eth.tx_en;   // Out
     assign eth_tx_d    = eth.tx_d;    // Out
-    // Make a 25 MHz clock
-    always eth_tx_clk = #20 ~eth_tx_clk;
-
+    // Make a 25 MHz clock from the reference clock
+    assign eth_tx_clk = eth_ref_clk;
 
     // The IP info
     IPInfo ip_info;

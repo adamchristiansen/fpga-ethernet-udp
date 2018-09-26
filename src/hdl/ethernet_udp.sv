@@ -176,6 +176,11 @@ endinterface
 /// These specifications imply that the safest maximum size of a UDP payload is
 /// 576 - 60 - 8 = 508 bytes.
 ///
+/// # Notes
+///
+/// *   Make sure that the [eth.tx_clk] input is constrained as a 25 MHz
+///     clock.
+///
 /// # Parameters
 ///
 /// *   [DATA_BYTES] is the width in bytes to be transmitted in the payload of
@@ -299,6 +304,9 @@ module ethernet_udp_transmit #(
     // The IP next level protocol to use. This is the User Datagram Protocol.
     localparam int unsigned IP_PROTOCOL = 8'h11;
 
+    // The number of bits to contribute to the FCS on each round.
+    localparam int unsigned FCS_STEP = 4;
+
     // This structure represents a frame to be sent. The padding bytes are
     // added to the data section of the packet.
     struct packed {
@@ -311,13 +319,10 @@ module ethernet_udp_transmit #(
 
     // Generate the clock signal to transmit on.
     logic phy_clk;
-    logic phy_clk_pulse;
     phy_clk_gen #(.DIVIDER(DIVIDER)) phy_clk_gen_0(
         .clk(clk),
-        .reset(clk),
-        .clear(0),
-        .phy_clk(phy_clk),
-        .phy_clk_pulse(phy_clk_pulse)
+        .reset(reset),
+        .phy_clk(phy_clk)
     );
 
     // TODO Can MDC and MDIO be removed?
@@ -325,37 +330,6 @@ module ethernet_udp_transmit #(
     assign eth.mdc = 0;
     assign eth.mdio = 0;
     assign eth.ref_clk = phy_clk;
-
-    // Edge detection on the tx_clk
-    logic tx_clk_fall_prev;
-    logic tx_clk_rise_prev;
-    always_ff @(posedge clk) begin
-        if (reset) begin
-            // These are set appropriately to prevent false positives after a
-            // reset
-            tx_clk_fall_prev <= 0;
-            tx_clk_rise_prev <= 1;
-        end else begin
-            tx_clk_fall_prev <= eth.tx_clk;
-            tx_clk_rise_prev <= eth.tx_clk;
-        end
-    end
-    logic tx_clk_fall;
-    logic tx_clk_rise;
-    assign tx_clk_fall = tx_clk_fall_prev  && !eth.tx_clk;
-    assign tx_clk_rise = !tx_clk_rise_prev && eth.tx_clk;
-
-    // Track the previous send value for edge detection
-    logic send_prev;
-    always_ff @(posedge clk) begin
-        if (reset) begin
-            // This is set to 1 to prevent accidentally detecting a rising
-            // edge.
-            send_prev <= 1;
-        end else begin
-            send_prev <= send;
-        end
-    end
 
     // This enum is used to track the progress of a state machine that writes
     // the data to the PHY.
@@ -369,9 +343,6 @@ module ethernet_udp_transmit #(
         WAIT
     } state;
 
-    // The number of bits to contribute to the FCS on each round.
-    localparam int unsigned FCS_STEP = 4;
-
     // Computes one step of the CRC-32 algorithm from the previous CRC value.
     //
     // # Arguments
@@ -382,12 +353,37 @@ module ethernet_udp_transmit #(
     // # Returns
     //
     // The next CRC value.
-    function logic [31:0] compute_crc(logic [31:0] crc, logic [FCS_STEP-1:0] data);
+    function logic [31:0] compute_crc(
+        input logic [31:0] crc,
+        input logic [FCS_STEP-1:0] data);
+
         localparam int unsigned POLYNOMIAL = 32'h04C11DB7;
+
         compute_crc = crc;
         for (int j = 0; j < FCS_STEP; j++) begin
-            compute_crc = {compute_crc[30:0], 1'b0} ^ (data[j] == compute_crc[31] ? '0 : POLYNOMIAL);
+            compute_crc = {compute_crc[30:0], 1'b0} ^
+                (data[j] == compute_crc[31] ? '0 : POLYNOMIAL);
         end
+    endfunction
+
+    // Swaps the nibbles in each byte of a value.
+    //
+    // # Arguments
+    //
+    // * [data] is the data to swap nibbles.
+    //
+    // # Returns
+    //
+    // The data with swapped nibbles.
+    function logic [31:0] swap_nibbles(input logic [31:0] data);
+        swap_nibbles[28+:4] = data[24+:4];
+        swap_nibbles[24+:4] = data[28+:4];
+        swap_nibbles[20+:4] = data[16+:4];
+        swap_nibbles[16+:4] = data[20+:4];
+        swap_nibbles[12+:4] = data[8+:4];
+        swap_nibbles[8+:4]  = data[12+:4];
+        swap_nibbles[4+:4]  = data[0+:4];
+        swap_nibbles[0+:4]  = data[4+:4];
     endfunction
 
     // This is used as a general purpose counter. Note that this is signed
@@ -398,8 +394,47 @@ module ethernet_udp_transmit #(
     // computing the IP header checksum.
     int unsigned header_checksum_temp;
 
-    // Run the state machine that sends that data to the PHY.
+    // The signal that is latched on the master clock to tell the system to
+    // latch the inputs and start sending data. This needs to be held for at
+    // least [DIVIDER] clock cycles.
+    logic start;
+
+    // The counter that makes sure the start signal is held for the
+    // appropriate number of cycles.
+    int start_counter;
+
+    // The previous value of the [send] input. This is used for synchronous
+    // edge detection.
+    logic send_prev;
+
+    // Run some control logic against the master clock.
     always_ff @(posedge clk) begin
+        if (reset) begin
+            // The previous [send] value is set to 1 to prevent a false
+            // positive on a rising edge after a reset.
+            send_prev     <= 1;
+            start         <= 0;
+            start_counter <= '0;
+        end else begin
+            send_prev <= send;
+            // When start_counter is non-zero start is asserted high
+            if (start_counter > 0) begin
+                start_counter <= start_counter - 1;
+            end else if (!start && ready && !send_prev && send) begin
+                start <= 1;
+                // Although the start signal only needs to be high for
+                // a number of clock cycles equal to the divider, just to be
+                // safe it is made to twice the divider.
+                start_counter <= 2 * DIVIDER;
+            end else begin
+                start <= 0;
+            end
+        end
+    end
+
+    // Run the state machine that sends that data to the PHY against the
+    // transmit clock.
+    always_ff @(negedge eth.tx_clk) begin
         if (reset) begin
             eth.rstn  <= 0;
             eth.tx_d  <= '0;
@@ -413,19 +448,16 @@ module ethernet_udp_transmit #(
             eth.rstn <= 1;
             // Run the state machine for what to send
             case (state)
-            // The PHY is powering up
-            POWER_UP: begin
-                // Wait for the PHY to properly power up
-                if (i < POWER_UP_CYCLES) begin
-                    i <= i + 1;
-                end else begin
-                    i     <= '0;
-                    ready <= 1;
-                    state <= READY;
-                end
+            // Wait for the PHY to properly power up
+            POWER_UP: if (i < POWER_UP_CYCLES) begin
+                i <= i + 1;
+            end else begin
+                i     <= '0;
+                ready <= 1;
+                state <= READY;
             end
             // Latch the data
-            READY: if (!send_prev && send) begin
+            READY: if (start) begin
                 // Construct the Ethernet header
                 frame.mac_header.dest_mac   <= ip_info.dest_mac;
                 frame.mac_header.src_mac    <= ip_info.src_mac;
@@ -483,103 +515,86 @@ module ethernet_udp_transmit #(
                 state <= SEND_PREAMBLE_SFD;
             end
             // Send the preamble and SFD to the PHY
-            SEND_PREAMBLE_SFD: if (tx_clk_fall) begin
-                if (i < PREAMBLE_SFD_NIBBLES) begin
-                    // TODO Note that these are reversed
-                    eth.tx_d <= (i < PREAMBLE_SFD_NIBBLES - 1) ?
-                        4'b0101 : 4'b1101;
-                    // TODO Should this be enabled here or when the actual
-                    // packet data gets sent?
-                    eth.tx_en <= 1;
-                    i         <= i + 1;
-                end else begin
-                    i     <= FRAME_NIBBLES - 1;
-                    state <= SEND_FRAME;
-                end
+            SEND_PREAMBLE_SFD: if (i < PREAMBLE_SFD_NIBBLES) begin
+                // TODO Note that these are reversed
+                eth.tx_d <= (i < PREAMBLE_SFD_NIBBLES - 1) ?
+                    4'b0101 : 4'b1101;
+                // TODO Should this be enabled here or when the actual
+                //      packet data gets sent?
+                eth.tx_en <= 1;
+                i         <= i + 1;
+            end else begin
+                i     <= FRAME_NIBBLES - 1;
+                state <= SEND_FRAME;
             end
-            // Send the frame to the PHY
-            SEND_FRAME: if (tx_clk_fall) begin
-                // Note that this loop counts down
-                if (i >= 0) begin
-                    // The transmission must be enabled.
-                    eth.tx_en <= 1;
-                    // Select the current nibble. This selects nibbles
-                    // according to the following diagram. Suppose there are
-                    // 3 bytes, their nibble indices are like the following.
-                    //
-                    //      23:20    19:16   15:12    11:8      7:4     3:0
-                    //        <--------+
-                    //        +------------------------->
-                    //                         <--------+
-                    //                         +------------------------->
-                    //                                         <---------+
-                    // Index: 4       5        2        3        0       1
-                    // Order: 1       0        3        2        5       4
-                    //
-                    // These are sent in order from highest index to lowest.
-                    // This directive expands to the indexer that will be used
-                    // for this.
-                    `define SLICE \
-                        8 * (i >> 1) + FCS_STEP * ((~i) & 1)+:FCS_STEP
-                    // Contribute the nibble to the FCS by manually doing the
-                    // division
-                    if (i >= FCS_NIBBLES) begin
-                        // Contribute the nibble to the CRC
-                        frame.fcs <= compute_crc(frame.fcs, frame[`SLICE]);
-                        // Send the nibble
-                        eth.tx_d <= frame[`SLICE];
+            // Send the frame to the PHY. Note that this loop counts down
+            SEND_FRAME: if (i >= 0) begin
+                // The transmission must be enabled.
+                eth.tx_en <= 1;
+                // Select the current nibble. This selects nibbles according
+                // to the following diagram. Suppose there are 3 bytes, their
+                // nibble indices are like the following.
+                //
+                //      23:20    19:16   15:12    11:8      7:4     3:0
+                //        <--------+
+                //        +------------------------->
+                //                         <--------+
+                //                         +------------------------->
+                //                                         <---------+
+                // Index: 4       5        2        3        0       1
+                // Order: 1       0        3        2        5       4
+                //
+                // These are sent in order from highest index to lowest. This
+                // directive expands to the indexer that will be used for this.
+                `define SLICE \
+                    8 * (i >> 1) + FCS_STEP * ((~i) & 1)+:FCS_STEP
+                // Contribute the nibble to the FCS by manually doing the
+                // division
+                if (i >= FCS_NIBBLES) begin
+                    // Contribute the nibble to the CRC. When i is equal to
+                    // FCS_NIBBLES, this is the case where the last nibble is
+                    // contributed to the FCS. At this stage, the FCS_NIBBLES
+                    // are swapped.
+                    if (i == FCS_NIBBLES) begin
+                        frame.fcs <= swap_nibbles(compute_crc(
+                            frame.fcs, frame[`SLICE]));
                     end else begin
-                        // The FCS has been computed and these remaining
-                        // nibbles are the nibbles of the FCS.
-
-                        // Get the current nibble and take the one's
-                        // complement, then reverse the order of the bits,
-                        // then send the new nibble
-                        eth.tx_d <= {<<bit{~frame[`SLICE]}};
-                        // Assign the reversed bits back to the frame. This is
-                        // only really useful for the simulator since these
-                        // bits are not read again.
-                        frame[`SLICE] <= {<<bit{~frame[`SLICE]}};
+                        frame.fcs <= compute_crc(frame.fcs, frame[`SLICE]);
                     end
-                    // Others
-                    i <= i - 1;
-                    `undef SLICE
+                    // Send the nibble
+                    eth.tx_d <= frame[`SLICE];
                 end else begin
-                    eth.tx_d  <= '0;
-                    eth.tx_en <= 0;
-                    i         <= '0;
-                    state     <= WAIT;
-                    $display("---- BEGIN FRAME ----");
-                    $display("%h", frame);
-                    $display("---- END FRAME ----");
+                    // The FCS has been computed and these remaining nibbles
+                    // are the nibbles of the FCS.
+
+                    // Get the current nibble and take the one's complement,
+                    // then reverse the order of the bits, then send the new
+                    // nibble
+                    eth.tx_d <= {<<bit{~frame[`SLICE]}};
+                    // Assign the reversed bits back to the frame. This is
+                    // only really useful for the simulator since these bits
+                    // are not read again.
+                    frame[`SLICE] <= {<<bit{~frame[`SLICE]}};
                 end
-            end else if (tx_clk_rise) begin
-                // The nibbles in each byte of the FCS must be swapped. This
-                // is done after the FCS is computed and the clock rises. This
-                // leverages the fact that the clock can be loaded on both
-                // edges since the fall is always used to write.
-                if (i == FCS_NIBBLES - 1) begin
-                    // Assign the lower nibbles to the upper nibbles and the
-                    // upper nibbles to the lower nibbles
-                    frame.fcs[28+:4] <= frame.fcs[24+:4];
-                    frame.fcs[24+:4] <= frame.fcs[28+:4];
-                    frame.fcs[20+:4] <= frame.fcs[16+:4];
-                    frame.fcs[16+:4] <= frame.fcs[20+:4];
-                    frame.fcs[12+:4] <= frame.fcs[8+:4];
-                    frame.fcs[8+:4]  <= frame.fcs[12+:4];
-                    frame.fcs[4+:4]  <= frame.fcs[0+:4];
-                    frame.fcs[0+:4]  <= frame.fcs[4+:4];
-                end
+                // Others
+                i <= i - 1;
+                `undef SLICE
+            end else begin
+                eth.tx_d  <= '0;
+                eth.tx_en <= 0;
+                i         <= '0;
+                state     <= WAIT;
+                $display("---- BEGIN FRAME ----");
+                $display("%h", frame);
+                $display("---- END FRAME ----");
             end
             // Wait the appropriate time for the Ethernet interframe gap
-            WAIT: if (tx_clk_fall) begin
-                if (i < GAP_NIBBLES) begin
-                    i <= i + 1;
-                end else begin
-                    i     <= '0;
-                    ready <= 1;
-                    state <= READY;
-                end
+            WAIT: if (i < GAP_NIBBLES) begin
+                i <= i + 1;
+            end else begin
+                i     <= '0;
+                ready <= 1;
+                state <= READY;
             end
             endcase
         end
@@ -600,24 +615,16 @@ endmodule
 ///
 /// *   [clk] is the system clock and the reference clock for the division.
 /// *   [reset] is the system reset.
-/// *   [clear] is a synchronous clear signal that resets the output clocks
-///     while it is asserted. The clocks will begin counting when this is
-///     deasserted.
 /// *   [phy_clk] is the generated UDP clock with as close to 50% duty cycle as
 ///     possible. The duty cycle is `(DIVIDER // 2)` / DIVIDER where `//` is
 ///     used to represent floored division. So an even [DIVIDER] will have a
 ///     duty cycle of 50% and an odd divider will be as close as possible to
 ///     50%.
-/// *   [phy_clk_pulse] has the same rising edge timing as [phy_clk], though
-///     it is only held high for one cycle of the generating clock. This is so
-///     it can be used in the logic without an edge detector.
 module phy_clk_gen #(
     parameter int DIVIDER = 0) (
     input logic clk,
     input logic reset,
-    input logic clear,
-    output logic phy_clk,
-    output logic phy_clk_pulse);
+    output logic phy_clk);
 
     // Assert that the parameters are appropriate
     initial begin
@@ -635,14 +642,12 @@ module phy_clk_gen #(
 
     // Update the generated clock.
     always_ff @(posedge clk) begin
-        if (reset || clear) begin
-            phy_clk       <= 0;
-            phy_clk_pulse <= '0;
-            counter       <= '0;
+        if (reset) begin
+            phy_clk <= 0;
+            counter <= '0;
         end else begin
-            phy_clk       <= counter >= COUNTER_FLIP;
-            phy_clk_pulse <= counter == COUNTER_FLIP;
-            counter       <= counter < COUNTER_MAX ? counter + 1 : '0;
+            phy_clk <= counter >= COUNTER_FLIP;
+            counter <= counter < COUNTER_MAX ? counter + 1 : '0;
         end
     end
 
