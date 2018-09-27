@@ -286,8 +286,8 @@ module ethernet_udp_transmit #(
     // The IP header length.
     localparam int unsigned IP_IHL = IP_HEADER_BYTES / 4;
 
-    // The IP type of service. This requests high throughput and reliability.
-    localparam int unsigned IP_TOS = 8'h0C;
+    // The IP type of service.
+    localparam int unsigned IP_TOS = 8'h00;
 
     // The IP fragment identification.
     localparam int unsigned IP_ID = 0;
@@ -322,14 +322,13 @@ module ethernet_udp_transmit #(
     phy_clk_gen #(.DIVIDER(DIVIDER)) phy_clk_gen_0(
         .clk(clk),
         .reset(reset),
-        .phy_clk(phy_clk)
+        .phy_clk(eth.ref_clk)
     );
 
     // TODO Can MDC and MDIO be removed?
     // Set up the signals to the PHY
-    assign eth.mdc = 0;
+    assign eth.mdc  = 0;
     assign eth.mdio = 0;
-    assign eth.ref_clk = phy_clk;
 
     // This enum is used to track the progress of a state machine that writes
     // the data to the PHY.
@@ -386,22 +385,14 @@ module ethernet_udp_transmit #(
         swap_nibbles[0+:4]  = data[4+:4];
     endfunction
 
-    // This is used as a general purpose counter. Note that this is signed
-    // because it is used to count up and down.
-    int i;
-
-    // This value is used as a temporary value in an intermediate step for
-    // computing the IP header checksum.
-    int unsigned header_checksum_temp;
-
     // The signal that is latched on the master clock to tell the system to
     // latch the inputs and start sending data. This needs to be held for at
     // least [DIVIDER] clock cycles.
-    logic start;
+    logic send_hold;
 
     // The counter that makes sure the start signal is held for the
     // appropriate number of cycles.
-    int start_counter;
+    int send_counter;
 
     // The previous value of the [send] input. This is used for synchronous
     // edge detection.
@@ -412,25 +403,33 @@ module ethernet_udp_transmit #(
         if (reset) begin
             // The previous [send] value is set to 1 to prevent a false
             // positive on a rising edge after a reset.
-            send_prev     <= 1;
-            start         <= 0;
-            start_counter <= '0;
+            send_prev    <= 1;
+            send_hold    <= 0;
+            send_counter <= '0;
         end else begin
             send_prev <= send;
-            // When start_counter is non-zero start is asserted high
-            if (start_counter > 0) begin
-                start_counter <= start_counter - 1;
-            end else if (!start && ready && !send_prev && send) begin
-                start <= 1;
+            // While send_counter is non-zero start is asserted high
+            if (send_counter > 0) begin
+                send_counter <= send_counter - 1;
+            end else if (!send_hold && ready && !send_prev && send) begin
+                send_hold <= 1;
                 // Although the start signal only needs to be high for
                 // a number of clock cycles equal to the divider, just to be
                 // safe it is made to twice the divider.
-                start_counter <= 2 * DIVIDER;
+                send_counter <= 2 * DIVIDER;
             end else begin
-                start <= 0;
+                send_hold <= 0;
             end
         end
     end
+
+    // This is used as a general purpose counter. Note that this is signed
+    // because it is used to count up and down.
+    int i;
+
+    // This value is used as a temporary value in an intermediate step for
+    // computing the IP header checksum.
+    int unsigned header_checksum_temp;
 
     // Run the state machine that sends that data to the PHY against the
     // transmit clock.
@@ -457,7 +456,7 @@ module ethernet_udp_transmit #(
                 state <= READY;
             end
             // Latch the data
-            READY: if (start) begin
+            READY: if (send_hold) begin
                 // Construct the Ethernet header
                 frame.mac_header.dest_mac   <= ip_info.dest_mac;
                 frame.mac_header.src_mac    <= ip_info.src_mac;
@@ -509,18 +508,15 @@ module ethernet_udp_transmit #(
             end
             CHECKSUM_2: begin
                 frame.ip_header.header_checksum <=
-                    header_checksum_temp[31:16] + header_checksum_temp[15:0];
+                    ~(header_checksum_temp[31:16] + header_checksum_temp[15:0]);
                 // Others
                 i     <= '0;
                 state <= SEND_PREAMBLE_SFD;
             end
             // Send the preamble and SFD to the PHY
             SEND_PREAMBLE_SFD: begin
-                // TODO Note that these are reversed
-                eth.tx_d <= (i < PREAMBLE_SFD_NIBBLES - 1) ?
+                eth.tx_d <= (i != PREAMBLE_SFD_NIBBLES - 2) ?
                     4'b0101 : 4'b1101;
-                // TODO Should this be enabled here or when the actual
-                //      packet data gets sent?
                 eth.tx_en <= 1;
                 if (i < PREAMBLE_SFD_NIBBLES - 1) begin
                     i <= i + 1;
@@ -531,8 +527,6 @@ module ethernet_udp_transmit #(
             end
             // Send the frame to the PHY. Note that this loop counts down
             SEND_FRAME: if (i >= 0) begin
-                // The transmission must be enabled.
-                eth.tx_en <= 1;
                 // Select the current nibble. This selects nibbles according
                 // to the following diagram. Suppose there are 3 bytes, their
                 // nibble indices are like the following.
@@ -583,7 +577,6 @@ module ethernet_udp_transmit #(
                 `undef SLICE
             end else begin
                 eth.tx_d  <= '0;
-                eth.tx_en <= 0;
                 i         <= '0;
                 state     <= WAIT;
                 $display("---- BEGIN FRAME ----");
@@ -594,9 +587,10 @@ module ethernet_udp_transmit #(
             WAIT: if (i < GAP_NIBBLES) begin
                 i <= i + 1;
             end else begin
-                i     <= '0;
-                ready <= 1;
-                state <= READY;
+                eth.tx_en <= 0;
+                i         <= '0;
+                ready     <= 1;
+                state     <= READY;
             end
             endcase
         end
