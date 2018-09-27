@@ -161,6 +161,9 @@ module main(
     assign ip_info.dest_mac  = params.dest_mac;
     assign ip_info.dest_port = params.dest_port;
 
+    // Indicates the Ethernet module is ready to send data
+    logic eth_ready;
+
     ethernet_udp_transmit #(.DATA_BYTES(DATA_BYTES), .DIVIDER(4))
     ethernet_udp_transmit(
         // Standard
@@ -170,11 +173,22 @@ module main(
         .data(eth_data),
         .eth(eth),
         .ip_info(ip_info),
-        .ready(led[0]),
+        .ready(eth_ready),
         .send(send_eth)
     );
 
-    // Tie the unused LEDs to low
-    assign led[3:1] = '0;
+    // When eth_ready rises, increment the LED counter
+    logic eth_ready_prev;
+    always_ff @(posedge clk) begin
+        if (reset) begin
+            eth_ready_prev <= 1;
+            led            <= '0;
+        end else begin
+            eth_ready_prev <= eth_ready;
+            if (!eth_ready_prev && eth_ready) begin
+                led <= led + 1;
+            end
+        end
+    end
 
 endmodule
