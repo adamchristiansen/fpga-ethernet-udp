@@ -24,6 +24,7 @@
 /// *   [eth_tx_d] is the data to transmit.
 /// *   [uart_rx] is the receive end of the serial.
 /// *   [uart_tx] is the transmit end of the serial.
+/// *   [led] is a set of status LEDs.
 module main(
     // System
     input logic clk,
@@ -57,12 +58,12 @@ module main(
 
     // This is a structure of parameters that descibes what to send.
     struct packed {
-        logic [32:0] src_ip;
-        logic [47:0] src_mac;
+        logic [31:0] src_ip;
         logic [15:0] src_port;
-        logic [32:0] dest_ip;
-        logic [47:0] dest_mac;
+        logic [47:0] src_mac;
+        logic [31:0] dest_ip;
         logic [15:0] dest_port;
+        logic [47:0] dest_mac;
         logic [7:0] seed;
         logic [7:0] generator;
     } params;
@@ -96,7 +97,7 @@ module main(
                 param_index  <= PARAM_BYTES - 1;
                 params_ready <= 1;
             end else begin
-                param_index <= param_index - 1;
+                param_index  <= param_index - 1;
                 params_ready <= 0;
             end
         end else begin
@@ -134,7 +135,8 @@ module main(
             send_eth <= 0;
         end else if (params_ready) begin
             for (int unsigned i = 0; i < DATA_BYTES; i++) begin
-                eth_data[8*i+:8] <= params.seed + (params.generator * i);
+                eth_data[8*i+:8] <=
+                    params.seed + (params.generator * (DATA_BYTES - 1 - i));
             end
             send_eth <= 1;
         end else begin

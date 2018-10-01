@@ -37,7 +37,7 @@ impl<'a> TestCase<'a> {
         if self.params.bytes > 0 {
             v.push(self.seed);
             for i in 1..self.params.bytes {
-                let next = v[i - 1] + self.gen;
+                let next = ((v[i - 1] as u64) + (self.gen as u64)) as u8;
                 v.push(next);
             }
         }
@@ -52,7 +52,7 @@ impl<'a> TestCase<'a> {
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut bytes = vec![];
         // Not that this can't be implemented in a more generic way because some of these numbers
-        // 48-bit, which does not lend itself well to removing the size parameter.
+        // are 48-bit, which does not lend itself well to removing the size parameter.
         Self::append_bytes(&mut bytes, self.params.src_ip.into(), 4);
         Self::append_bytes(&mut bytes, self.params.src_port.into(), 2);
         Self::append_bytes(&mut bytes, self.params.src_mac, 6);
@@ -74,8 +74,7 @@ impl<'a> TestCase<'a> {
     /// * `data` - Consists of the bytes to be added to the vector.
     /// * `bytes` - The number of lower bytes in the value to add to the vector.
     fn append_bytes(vec: &mut Vec<u8>, data: u64, bytes: u8) {
-        // Make sure the number if big endian
-        let v = data.to_be();
+        let v = data;
         for i in (0..bytes).rev() {
             vec.push(((v >> (8 * i)) & 0xFF) as u8);
         }
