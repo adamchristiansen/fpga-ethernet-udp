@@ -122,11 +122,6 @@ typedef struct packed {
 ///
 /// # Ports
 ///
-/// *   [eth_crs] is the carrier sense signal. It is driven high when the
-///     medium is busy.
-/// *   [eth_mdc] is the clock for communicating over MDIO, with a maximum rate
-///     of 25MHz.
-/// *   [eth_mdio] is a bidrectional data signal for instructions.
 /// *   [eth_ref_clk] is the reference clock input. This must be connected to a
 ///     25MHz clock source.
 /// *   [eth_rstn] is an active low reset. This signal must be asserted for at
@@ -143,8 +138,6 @@ typedef struct packed {
 /// *   [fwd] forwards the ports while preserving the port directions to
 ///     communicate with the PHY.
 interface EthernetPHY;
-    logic mdc;
-    logic mdio;
     logic ref_clk;
     logic rstn;
     logic tx_clk;
@@ -152,8 +145,6 @@ interface EthernetPHY;
     logic [3:0] tx_d;
 
     modport fwd(
-        output mdc,
-        inout mdio,
         output ref_clk,
         output rstn,
         input tx_clk,
@@ -324,11 +315,6 @@ module ethernet_udp_transmit #(
         .reset(reset),
         .phy_clk(eth.ref_clk)
     );
-
-    // TODO Can MDC and MDIO be removed?
-    // Set up the signals to the PHY
-    assign eth.mdc  = 0;
-    assign eth.mdio = 0;
 
     // This enum is used to track the progress of a state machine that writes
     // the data to the PHY.
