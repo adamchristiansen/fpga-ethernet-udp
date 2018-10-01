@@ -272,8 +272,8 @@ module ethernet_udp_transmit #(
         IP_HEADER_NIBBLES + UDP_HEADER_NIBBLES + DATA_NIBBLES + PAD_NIBBLES +
         FCS_NIBBLES;
 
-    // The number of write cycles to wait after sending after writing data to
-    // the PHY. This must be at least 12 bytes worth of time.
+    // The number of write cycles to wait after writing data to the PHY. This
+    // must be at least 12 bytes worth of time.
     localparam int unsigned GAP_NIBBLES = 40;
 
     // The Ethernet type for the Ethernet header. This value indicates that
@@ -515,7 +515,7 @@ module ethernet_udp_transmit #(
             end
             // Send the preamble and SFD to the PHY
             SEND_PREAMBLE_SFD: begin
-                eth.tx_d <= (i != PREAMBLE_SFD_NIBBLES - 2) ?
+                eth.tx_d <= (i < PREAMBLE_SFD_NIBBLES - 1) ?
                     4'b0101 : 4'b1101;
                 eth.tx_en <= 1;
                 if (i < PREAMBLE_SFD_NIBBLES - 1) begin
@@ -577,6 +577,7 @@ module ethernet_udp_transmit #(
                 `undef SLICE
             end else begin
                 eth.tx_d  <= '0;
+                eth.tx_en <= 0;
                 i         <= '0;
                 state     <= WAIT;
                 $display("---- BEGIN FRAME ----");
@@ -587,10 +588,9 @@ module ethernet_udp_transmit #(
             WAIT: if (i < GAP_NIBBLES) begin
                 i <= i + 1;
             end else begin
-                eth.tx_en <= 0;
-                i         <= '0;
-                ready     <= 1;
-                state     <= READY;
+                i     <= '0;
+                ready <= 1;
+                state <= READY;
             end
             endcase
         end
