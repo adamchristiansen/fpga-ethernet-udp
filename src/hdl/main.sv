@@ -7,13 +7,6 @@
 ///
 /// *   [clk] is the 100MHz off-chip clock.
 /// *   [reset] is the active high system reset signal.
-/// *   [eth_crs] is the carrier sense signal. It is driven high when the
-///     medium is busy.
-/// *   [eth_mdc] is the clock for communicating over MDIO, with a maximum rate
-///     of 25MHz.
-/// *   [eth_mdio] is a bidrectional data signal for instructions.
-/// *   [eth_ref_clk] is the reference clock input. This must be connected to a
-///     25MHz clock source.
 /// *   [eth_rstn] is an active low reset. This signal must be asserted for at
 ///     least 1 µs for a reset event to get triggered.
 /// *   [eth_tx_clk] is the clock to transmit data on. This will have two
@@ -30,8 +23,6 @@ module main(
     input logic clk,
     input logic reset,
     // Ethernet
-    output logic eth_mdc,
-    inout logic eth_mdio,
     output logic eth_ref_clk,
     output logic eth_rstn,
     input logic eth_tx_clk,
@@ -146,8 +137,6 @@ module main(
 
     // Instantiate an interface with the Ethernet PHY control signals
     EthernetPHY eth();
-    assign eth_mdc     = eth.mdc;     // Out
-    assign eth_mdio    = eth.mdio;    // In/Out
     assign eth_ref_clk = eth.ref_clk; // Out
     assign eth_rstn    = eth.rstn;    // Out
     assign eth.tx_clk  = eth_tx_clk;  // In

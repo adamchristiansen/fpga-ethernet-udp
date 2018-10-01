@@ -74,9 +74,8 @@ impl<'a> TestCase<'a> {
     /// * `data` - Consists of the bytes to be added to the vector.
     /// * `bytes` - The number of lower bytes in the value to add to the vector.
     fn append_bytes(vec: &mut Vec<u8>, data: u64, bytes: u8) {
-        let v = data;
         for i in (0..bytes).rev() {
-            vec.push(((v >> (8 * i)) & 0xFF) as u8);
+            vec.push(((data >> (8 * i)) & 0xFF) as u8);
         }
     }
 }
