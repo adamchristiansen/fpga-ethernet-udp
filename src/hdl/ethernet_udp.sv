@@ -101,7 +101,7 @@ typedef struct packed {
 /// Holds the values needed to describe the source and destination of an IP
 /// packet.
 ///
-/// # Fields
+/// # Ports
 ///
 /// *   [src_ip] is the source IP address.
 /// *   [src_mac] is the source MAC address.
@@ -109,14 +109,26 @@ typedef struct packed {
 /// *   [dest_ip] is the destination IP address.
 /// *   [dest_mac] is the destination MAC address.
 /// *   [dest_port] is the destination port number.
-typedef struct packed {
+///
+/// # Mod Ports
+///
+/// *   [in] is an input port.
+interface IPInfo;
     logic [31:0] src_ip;
     logic [47:0] src_mac;
     logic [15:0] src_port;
     logic [31:0] dest_ip;
     logic [47:0] dest_mac;
     logic [15:0] dest_port;
-} IPInfo;
+
+    modport in(
+        input src_ip,
+        input src_mac,
+        input src_port,
+        input dest_ip,
+        input dest_mac,
+        input dest_port);
+endinterface
 
 /// Holds the signals that control the Ethernet PHY.
 ///
@@ -212,7 +224,7 @@ module ethernet_udp_transmit #(
     // Ethernet
     input logic [8*DATA_BYTES-1:0] data,
     EthernetPHY.fwd eth,
-    input IPInfo ip_info,
+    IPInfo.in ip_info,
     output logic ready,
     input logic send);
 

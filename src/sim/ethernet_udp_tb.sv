@@ -23,15 +23,11 @@ module ethernet_udp_tb();
 
     // The signals to the Ethernet PHY
     EthernetPHY eth();
-    logic eth_mdc;
-    logic eth_mdio;
     logic eth_ref_clk;
     logic eth_rstn;
     logic eth_tx_clk;
     logic eth_tx_en;
     logic [3:0] eth_tx_d;
-    assign eth_mdc     = eth.mdc;     // Out
-    assign eth_mdio    = eth.mdio;    // In/Out
     assign eth_ref_clk = eth.ref_clk; // Out
     assign eth_rstn    = eth.rstn;    // Out
     assign eth.tx_clk  = eth_tx_clk;  // In
@@ -41,7 +37,7 @@ module ethernet_udp_tb();
     assign eth_tx_clk = eth_ref_clk;
 
     // The IP info
-    IPInfo ip_info;
+    IPInfo ip_info();
     assign ip_info.src_ip    = 32'h55_66_77_88;
     assign ip_info.src_mac   = 48'haa_bb_cc_dd_ee_ff;
     assign ip_info.src_port  = 16'h1000;

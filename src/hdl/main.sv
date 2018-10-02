@@ -144,7 +144,7 @@ module main(
     assign eth_tx_d    = eth.tx_d;    // Out
 
     // The information needed to describe the source and the destination
-    IPInfo ip_info;
+    IPInfo ip_info();
     assign ip_info.src_ip    = params.src_ip;
     assign ip_info.src_mac   = params.src_mac;
     assign ip_info.src_port  = params.src_port;
