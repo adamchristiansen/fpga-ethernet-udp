@@ -277,7 +277,7 @@ module ethernet_udp_transmit #(
 
     // The number of write cycles to wait after writing data to the PHY. This
     // must be at least 12 bytes worth of time.
-    localparam int unsigned GAP_NIBBLES = 40;
+    localparam int unsigned GAP_NIBBLES = 24;
 
     // The Ethernet type for the Ethernet header. This value indicates that
     // IPv4 is used.
