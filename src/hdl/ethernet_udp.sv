@@ -335,6 +335,8 @@ module ethernet_udp_transmit #(
         READY,
         IP_CHECKSUM_1,
         IP_CHECKSUM_2,
+        UDP_CHECKSUM_1,
+        UDP_CHECKSUM_2,
         SEND_PREAMBLE_SFD,
         SEND_FRAME,
         WAIT
@@ -426,8 +428,8 @@ module ethernet_udp_transmit #(
     int i;
 
     // This value is used as a temporary value in an intermediate step for
-    // computing the IP header checksum.
-    int unsigned ip_checksum_temp;
+    // computing the IP header checksum and UDP checksum.
+    int unsigned checksum_temp;
 
     // Run the state machine that sends that data to the PHY against the
     // transmit clock.
@@ -476,7 +478,7 @@ module ethernet_udp_transmit #(
                 frame.udp_header.src_port  <= ip_info.src_port;
                 frame.udp_header.dest_port <= ip_info.dest_port;
                 frame.udp_header.length    <= UDP_BYTES;
-                frame.udp_header.checksum  <= '0; // Left as 0
+                frame.udp_header.checksum  <= '0; // Computed later
                 // Add the data to the frame and zero the padding bytes
                 frame.data[8*(DATA_BYTES+PAD_BYTES)-1:8*PAD_BYTES] <= data;
                 if (PAD_BYTES > 0) begin
@@ -490,13 +492,14 @@ module ethernet_udp_transmit #(
             end
             // Compute the IP header checksum
             IP_CHECKSUM_1: begin
-                ip_checksum_temp <=
+                // Note that the header checksum field
+                // `frame.ip_header[64+:16]` is not included.
+                checksum_temp <=
                     frame.ip_header[144+:16] + // Version, IHL, ToS
                     frame.ip_header[128+:16] + // Total length
                     frame.ip_header[112+:16] + // Identification
                     frame.ip_header[ 96+:16] + // Flags, Fragmentation offset
                     frame.ip_header[ 80+:16] + // TTL, Protocol
-                    // frame.ip_header[ 64+:16] + // Header checksum
                     frame.ip_header[ 48+:16] + // Source IP Upper
                     frame.ip_header[ 32+:16] + // Source IP Lower
                     frame.ip_header[ 16+:16] + // Destination IP Upper
@@ -506,10 +509,49 @@ module ethernet_udp_transmit #(
             end
             IP_CHECKSUM_2: begin
                 frame.ip_header.header_checksum <=
-                    ~(ip_checksum_temp[31:16] + ip_checksum_temp[15:0]);
+                    ~(checksum_temp[31:16] + checksum_temp[15:0]);
                 // Others
                 i     <= '0;
-                state <= SEND_PREAMBLE_SFD;
+                state <= UDP_CHECKSUM_1;
+            end
+            UDP_CHECKSUM_1: begin
+                checksum_temp <=
+                    // Contribute the UDP pseudo header to the UDP checksum
+                    //  0      7 8     15 16    23 24    31
+                    // +--------+--------+--------+--------+
+                    // |          Source Address           |
+                    // +--------+--------+--------+--------+
+                    // |        Destination Address        |
+                    // +--------+--------+--------+--------+
+                    // |  Zero  |Protocol|   UDP Length    |
+                    // +--------+--------+--------+--------+
+                    frame.ip_header.src_ip[16+:16] +
+                    frame.ip_header.src_ip[0+:16] +
+                    frame.ip_header.dest_ip[16+:16] +
+                    frame.ip_header.dest_ip[0+:16] +
+                    {8'h00, frame.ip_header.protocol} +
+                    frame.udp_header.length +
+                    // Contribute the UDP header. Note that the UDP checksum
+                    // is not included in the calculation.
+                    frame.udp_header.src_port +
+                    frame.udp_header.dest_port +
+                    frame.udp_header.length;
+                // Others
+                i     <= '0;
+                state <= UDP_CHECKSUM_2;
+            end
+            UDP_CHECKSUM_2: begin
+                // Contribute the data to UDP checksum
+                if (i < (DATA_BYTES + PAD_BYTES) / 2) begin
+                    checksum_temp <= checksum_temp + {16'h0000, frame.data[16*i+:16]};
+                    i             <= i + 1;
+                end else begin
+                    frame.udp_header.checksum <=
+                        ~(checksum_temp[31:16] + checksum_temp[15:0]);
+                    // Others
+                    i     <= '0;
+                    state <= SEND_PREAMBLE_SFD;
+                end
             end
             // Send the preamble and SFD to the PHY
             SEND_PREAMBLE_SFD: begin
