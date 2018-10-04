@@ -333,8 +333,8 @@ module ethernet_udp_transmit #(
     enum {
         POWER_UP,
         READY,
-        CHECKSUM_1,
-        CHECKSUM_2,
+        IP_CHECKSUM_1,
+        IP_CHECKSUM_2,
         SEND_PREAMBLE_SFD,
         SEND_FRAME,
         WAIT
@@ -427,7 +427,7 @@ module ethernet_udp_transmit #(
 
     // This value is used as a temporary value in an intermediate step for
     // computing the IP header checksum.
-    int unsigned header_checksum_temp;
+    int unsigned ip_checksum_temp;
 
     // Run the state machine that sends that data to the PHY against the
     // transmit clock.
@@ -486,11 +486,11 @@ module ethernet_udp_transmit #(
                 frame.fcs <= 32'hFFFFFFFF;
                 // Others
                 ready <= 0;
-                state <= CHECKSUM_1;
+                state <= IP_CHECKSUM_1;
             end
             // Compute the IP header checksum
-            CHECKSUM_1: begin
-                header_checksum_temp <=
+            IP_CHECKSUM_1: begin
+                ip_checksum_temp <=
                     frame.ip_header[144+:16] + // Version, IHL, ToS
                     frame.ip_header[128+:16] + // Total length
                     frame.ip_header[112+:16] + // Identification
@@ -502,11 +502,11 @@ module ethernet_udp_transmit #(
                     frame.ip_header[ 16+:16] + // Destination IP Upper
                     frame.ip_header[  0+:16];  // Destination IP Lower
                 // Others
-                state <= CHECKSUM_2;
+                state <= IP_CHECKSUM_2;
             end
-            CHECKSUM_2: begin
+            IP_CHECKSUM_2: begin
                 frame.ip_header.header_checksum <=
-                    ~(header_checksum_temp[31:16] + header_checksum_temp[15:0]);
+                    ~(ip_checksum_temp[31:16] + ip_checksum_temp[15:0]);
                 // Others
                 i     <= '0;
                 state <= SEND_PREAMBLE_SFD;
