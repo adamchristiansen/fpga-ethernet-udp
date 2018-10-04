@@ -199,6 +199,10 @@ endinterface
 ///     this to 0 or a negative number disables the wait at powerup, but the
 ///     PHY will not be initialized properly. Disabling the startup check is
 ///     only really useful in simulation.
+/// *   [USE_UDP_CHECKSUM] governs whether the module generates a UDP
+///     checksum. In IPv4, the UDP checksum is optional. Generating a UDP
+///     checksum decreases the module throughput by up to 20%, but allows
+///     safer transmission. The default is to use the checksum.
 ///
 /// # Ports
 ///
@@ -217,7 +221,8 @@ endinterface
 module ethernet_udp_transmit #(
     parameter int DATA_BYTES = 0,
     parameter int DIVIDER = 0,
-    parameter int POWER_UP_CYCLES = 17_000_000) (
+    parameter int POWER_UP_CYCLES = 17_000_000,
+    parameter int USE_UDP_CHECKSUM = 1) (
     // Standard
     input logic clk,
     input logic reset,
@@ -232,14 +237,18 @@ module ethernet_udp_transmit #(
     initial begin
         // Check that the DATA_BYTES is set appropriately
         if (DATA_BYTES <= 0) begin
-            $error("The DATA_BYTES must be set to a positive number.");
+            $error("DATA_BYTES must be set to a positive number.");
         end
         if (DATA_BYTES > 508) begin
-            $error("The DATA_BYTES must be less than or equal to 508.");
+            $error("DATA_BYTES must be less than or equal to 508.");
         end
         // Check that the clock divider is set appropriately
         if (DIVIDER < 2) begin
-            $error("The DIVIDER must be set to at least 2.");
+            $error("DIVIDER must be set to at least 2.");
+        end
+        // Check that the  divider is set appropriately
+        if (USE_UDP_CHECKSUM != 0 && USE_UDP_CHECKSUM != 1) begin
+            $error("USE_UDP_CHECKSUM must be set to 0 or 1.");
         end
     end
 
@@ -512,7 +521,7 @@ module ethernet_udp_transmit #(
                     ~(checksum_temp[31:16] + checksum_temp[15:0]);
                 // Others
                 i     <= '0;
-                state <= UDP_CHECKSUM_1;
+                state <= USE_UDP_CHECKSUM ? UDP_CHECKSUM_1 : SEND_PREAMBLE_SFD;
             end
             UDP_CHECKSUM_1: begin
                 checksum_temp <=

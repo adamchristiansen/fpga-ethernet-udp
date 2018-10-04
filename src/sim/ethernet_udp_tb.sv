@@ -53,7 +53,8 @@ module ethernet_udp_tb();
     ethernet_udp_transmit #(
         .DATA_BYTES(DATA_BYTES),
         .DIVIDER(DIVIDER),
-        .POWER_UP_CYCLES(0)) dut_ethernet_transmit_udp(
+        .POWER_UP_CYCLES(0),
+        .USE_UDP_CHECKSUM(1)) dut_ethernet_transmit_udp(
         .clk(clk),
         .reset(reset),
         .data(data),
