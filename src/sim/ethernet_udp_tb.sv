@@ -4,11 +4,14 @@ module ethernet_udp_tb();
 
     // The parameters for the Ethernet nodule
     localparam int DATA_BYTES = 16;
-    localparam int DIVIDER = 4;
 
     // Create a 100 MHz clock
     logic clk = 0;
     always clk = #5 ~clk;
+
+    // Create a 25 MHz clock
+    logic clk25 = 0;
+    always clk25 = #20 ~clk25;
 
     // The reset signal
     logic reset = 0;
@@ -51,12 +54,13 @@ module ethernet_udp_tb();
 
     // Instantiate the device under test
     ethernet_udp_transmit #(
+        .CLK_RATIO(4),
         .DATA_BYTES(DATA_BYTES),
-        .DIVIDER(DIVIDER),
-        .POWER_UP_CYCLES(0),
+        .POWER_UP_CYCLES(100),
         .USE_UDP_CHECKSUM(1)) dut_ethernet_transmit_udp(
         .clk(clk),
         .reset(reset),
+        .clk25(clk25),
         .data(data),
         .eth(eth),
         .ip_info(ip_info),
@@ -73,7 +77,7 @@ module ethernet_udp_tb();
         reset <= 0;
 
         // Send the data
-        #100;
+        #5000;
         send <= 1;
         #100;
         send <= 0;
