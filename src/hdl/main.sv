@@ -20,7 +20,7 @@
 /// *   [led] is a set of status LEDs.
 module main(
     // System
-    input logic clk,
+    input logic clk_ref,
     input logic reset,
     // Ethernet
     output logic eth_ref_clk,
@@ -33,6 +33,21 @@ module main(
     output logic uart_tx,
     // Others
     output logic [3:0] led);
+
+    //-------------------------------------------------------------------------
+    // Generate Clocks
+    //-------------------------------------------------------------------------
+
+    logic clk;
+    logic clk25;
+
+    clk_gen clk_gen(
+        .clk_ref(clk_ref),
+        .reset(reset),
+        .clk100(clk),
+        .clk25(clk25),
+        .locked(/* Unused */)
+    );
 
     //-------------------------------------------------------------------------
     // USB UART
@@ -155,12 +170,13 @@ module main(
     // Indicates the Ethernet module is ready to send data
     logic eth_ready;
 
-    ethernet_udp_transmit #(.DATA_BYTES(DATA_BYTES), .DIVIDER(4))
+    ethernet_udp_transmit #(.CLK_RATIO(4), .DATA_BYTES(DATA_BYTES))
     ethernet_udp_transmit(
         // Standard
         .clk(clk),
         .reset(reset),
         // Ethernet
+        .clk25(clk25),
         .data(eth_data),
         .eth(eth),
         .ip_info(ip_info),

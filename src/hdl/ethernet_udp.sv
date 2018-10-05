@@ -186,16 +186,17 @@ endinterface
 ///
 /// # Parameters
 ///
+/// *   [CLK_RATIO] is the ratio of the rate of [clk] to the rate of [clk25].
+///     This value is always rounded up, so formally the value is
+///
+///         CLK_RATIO = ceil(rate(clk) / rate(clk25))
+///
+///     This implies a minimum value of 1.
 /// *   [DATA_BYTES] is the width in bytes to be transmitted in the payload of
 ///     each UDP packet.
-/// *   [DIVIDER] is the value of a clock divider that is used to generate a
-///     new clock from the system clock. The new clock is used to write to the
-///     Ethernet PHY. The divider must be large enough so that the produced
-///     clock is no faster than 25MHz (which is the max speed supported by the
-///     10/100 PHY).
 /// *   [POWER_UP_CYCLES] is the number of clock cycles to wait at power up
 ///     before the PHY is ready. This must be at least 167 ms worth of time.
-///     The default value is set appropriately for a 100 MHz [clk]. Setting
+///     The default value is set appropriately for a 25 MHz [clk]. Setting
 ///     this to 0 or a negative number disables the wait at powerup, but the
 ///     PHY will not be initialized properly. Disabling the startup check is
 ///     only really useful in simulation.
@@ -208,6 +209,7 @@ endinterface
 ///
 /// *   [clk] is the system clock.
 /// *   [reset] is the system reset signal.
+/// *   [clk25] is a 25 MHz clock signal used to write to the PHY.
 /// *   [data] is the bus of data to be transmitted over the port.
 /// *   [eth] contains the signals used to write to the Ethernet PHY.
 /// *   [ip_info] is the source and destination data that is needed to transmit
@@ -219,14 +221,15 @@ endinterface
 ///     transmit more data. This is held high while ready and falls when the
 /// *   [send] signal rises.
 module ethernet_udp_transmit #(
+    parameter int CLK_RATIO = 0,
     parameter int DATA_BYTES = 0,
-    parameter int DIVIDER = 0,
-    parameter int POWER_UP_CYCLES = 17_000_000,
+    parameter int POWER_UP_CYCLES = 5_000_000,
     parameter int USE_UDP_CHECKSUM = 1) (
     // Standard
     input logic clk,
     input logic reset,
     // Ethernet
+    input logic clk25,
     input logic [8*DATA_BYTES-1:0] data,
     EthernetPHY.fwd eth,
     IPInfo.in ip_info,
@@ -235,16 +238,16 @@ module ethernet_udp_transmit #(
 
     // Assert that the parameters are appropriate
     initial begin
+        // Check that the clock ratio is set appropriately
+        if (CLK_RATIO < 2) begin
+            $error("CLK_RATIO must be set to at least 1.");
+        end
         // Check that the DATA_BYTES is set appropriately
         if (DATA_BYTES <= 0) begin
             $error("DATA_BYTES must be set to a positive number.");
         end
         if (DATA_BYTES > 508) begin
             $error("DATA_BYTES must be less than or equal to 508.");
-        end
-        // Check that the clock divider is set appropriately
-        if (DIVIDER < 2) begin
-            $error("DIVIDER must be set to at least 2.");
         end
         // Check that the  divider is set appropriately
         if (USE_UDP_CHECKSUM != 0 && USE_UDP_CHECKSUM != 1) begin
@@ -329,27 +332,8 @@ module ethernet_udp_transmit #(
         logic [31:0] fcs;
     } frame;
 
-    // Generate the clock signal to transmit on.
-    logic phy_clk;
-    phy_clk_gen #(.DIVIDER(DIVIDER)) phy_clk_gen_0(
-        .clk(clk),
-        .reset(reset),
-        .phy_clk(eth.ref_clk)
-    );
-
-    // This enum is used to track the progress of a state machine that writes
-    // the data to the PHY.
-    enum {
-        POWER_UP,
-        READY,
-        IP_CHECKSUM_1,
-        IP_CHECKSUM_2,
-        UDP_CHECKSUM_1,
-        UDP_CHECKSUM_2,
-        SEND_PREAMBLE_SFD,
-        SEND_FRAME,
-        WAIT
-    } state;
+    // Forward the 25 MHz clock to the PHY
+    assign eth.ref_clk = clk25;
 
     // Computes one step of the CRC-32 algorithm from the previous CRC value.
     //
@@ -396,7 +380,7 @@ module ethernet_udp_transmit #(
 
     // The signal that is latched on the master clock to tell the system to
     // latch the inputs and start sending data. This needs to be held for at
-    // least [DIVIDER] clock cycles.
+    // least [CLK_RATIO] clock cycles.
     logic send_hold;
 
     // The counter that makes sure the start signal is held for the
@@ -425,12 +409,26 @@ module ethernet_udp_transmit #(
                 // Although the start signal only needs to be high for
                 // a number of clock cycles equal to the divider, just to be
                 // safe it is made to twice the divider.
-                send_counter <= 2 * DIVIDER;
+                send_counter <= 2 * CLK_RATIO;
             end else begin
                 send_hold <= 0;
             end
         end
     end
+
+    // This enum is used to track the progress of a state machine that writes
+    // the data to the PHY.
+    enum {
+        POWER_UP,
+        READY,
+        IP_CHECKSUM_1,
+        IP_CHECKSUM_2,
+        UDP_CHECKSUM_1,
+        UDP_CHECKSUM_2,
+        SEND_PREAMBLE_SFD,
+        SEND_FRAME,
+        WAIT
+    } state;
 
     // This is used as a general purpose counter. Note that this is signed
     // because it is used to count up and down.
@@ -642,57 +640,6 @@ module ethernet_udp_transmit #(
                 state <= READY;
             end
             endcase
-        end
-    end
-
-endmodule
-
-/// This module is used to generate a clock pulse used to send out the Ethernet
-/// data to the PHY. The resulting clock is only held high for 1 clock cycle
-/// of the reference clock.
-///
-/// # Parameters
-///
-/// *   `DIVIDER` is the clock divider value to generate the new clock. This
-///     must be at least 2.
-///
-/// # Ports
-///
-/// *   [clk] is the system clock and the reference clock for the division.
-/// *   [reset] is the system reset.
-/// *   [phy_clk] is the generated UDP clock with as close to 50% duty cycle as
-///     possible. The duty cycle is `(DIVIDER // 2)` / DIVIDER where `//` is
-///     used to represent floored division. So an even [DIVIDER] will have a
-///     duty cycle of 50% and an odd divider will be as close as possible to
-///     50%.
-module phy_clk_gen #(
-    parameter int DIVIDER = 0) (
-    input logic clk,
-    input logic reset,
-    output logic phy_clk);
-
-    // Assert that the parameters are appropriate
-    initial begin
-        if (DIVIDER < 2) begin
-            $error("Expected DIVIDER parameter to be at least 2.");
-        end
-    end
-
-    // These values are used to divide the clock.
-    localparam int unsigned COUNTER_MAX  = DIVIDER - 1;
-    localparam int unsigned COUNTER_FLIP = DIVIDER / 2;
-
-    // The counted value used to derive the clock
-    int unsigned counter;
-
-    // Update the generated clock.
-    always_ff @(posedge clk) begin
-        if (reset) begin
-            phy_clk <= 0;
-            counter <= '0;
-        end else begin
-            phy_clk <= counter >= COUNTER_FLIP;
-            counter <= counter < COUNTER_MAX ? counter + 1 : '0;
         end
     end
 
