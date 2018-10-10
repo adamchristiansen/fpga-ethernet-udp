@@ -324,13 +324,18 @@ module ethernet_udp_transmit #(
 
     // This structure represents a frame to be sent. The padding bytes are
     // added to the data section of the packet.
-    struct packed {
+    typedef struct packed {
         MACHeader mac_header;
         IPHeader ip_header;
         UDPHeader udp_header;
         logic [8*(DATA_BYTES+PAD_BYTES)-1:0] data;
         logic [31:0] fcs;
-    } frame;
+    } Frame;
+
+    // The frame to send and the frame that is latched on the master clock to
+    // cross clock domains.
+    Frame frame;
+    Frame frame_hold;
 
     // Forward the 25 MHz clock to the PHY
     assign eth.ref_clk = clk25;
@@ -394,10 +399,10 @@ module ethernet_udp_transmit #(
     // Run some control logic against the master clock.
     always_ff @(posedge clk) begin
         if (reset) begin
+            frame_hold <= '0;
             // The previous [send] value is set to 1 to prevent a false
             // positive on a rising edge after a reset.
             send_prev    <= 1;
-            send_hold    <= 0;
             send_counter <= '0;
         end else begin
             send_prev <= send;
@@ -405,16 +410,45 @@ module ethernet_udp_transmit #(
             if (send_counter > 0) begin
                 send_counter <= send_counter - 1;
             end else if (!send_hold && ready && !send_prev && send) begin
-                send_hold <= 1;
+                // Construct the Ethernet header
+                frame_hold.mac_header.dest_mac   <= ip_info.dest_mac;
+                frame_hold.mac_header.src_mac    <= ip_info.src_mac;
+                frame_hold.mac_header.ether_type <= ETHER_TYPE;
+                // Construct the IP header
+                frame_hold.ip_header.version         <= IP_VERSION;
+                frame_hold.ip_header.ihl             <= IP_IHL;
+                frame_hold.ip_header.type_of_service <= IP_TOS;
+                frame_hold.ip_header.total_length    <= IP_BYTES;
+                frame_hold.ip_header.identification  <= IP_ID;
+                frame_hold.ip_header.flags           <= IP_FLAGS;
+                frame_hold.ip_header.fragment_offset <= IP_FRAG_OFFSET;
+                frame_hold.ip_header.time_to_live    <= IP_TTL;
+                frame_hold.ip_header.protocol        <= IP_PROTOCOL;
+                frame_hold.ip_header.header_checksum <= '0; // Computed later
+                frame_hold.ip_header.src_ip          <= ip_info.src_ip;
+                frame_hold.ip_header.dest_ip         <= ip_info.dest_ip;
+                // Construct the UDP header
+                frame_hold.udp_header.src_port  <= ip_info.src_port;
+                frame_hold.udp_header.dest_port <= ip_info.dest_port;
+                frame_hold.udp_header.length    <= UDP_BYTES;
+                frame_hold.udp_header.checksum  <= '0; // Computed later
+                // Add the data to the frame and zero the padding bytes
+                frame_hold.data[8*(DATA_BYTES+PAD_BYTES)-1:8*PAD_BYTES] <= data;
+                if (PAD_BYTES > 0) begin
+                    frame_hold.data[8*PAD_BYTES-1:0] <= '0;
+                end
+                // The CRC starts as all 1's
+                frame_hold.fcs <= 32'hFFFFFFFF;
+
                 // Although the start signal only needs to be high for
                 // a number of clock cycles equal to the divider, just to be
                 // safe it is made to twice the divider.
                 send_counter <= 2 * CLK_RATIO;
-            end else begin
-                send_hold <= 0;
             end
         end
     end
+    // The send signal is held while the counter is non-zero
+    assign send_hold = |send_counter;
 
     // This enum is used to track the progress of a state machine that writes
     // the data to the PHY.
@@ -464,35 +498,7 @@ module ethernet_udp_transmit #(
             end
             // Latch the data
             READY: if (send_hold) begin
-                // Construct the Ethernet header
-                frame.mac_header.dest_mac   <= ip_info.dest_mac;
-                frame.mac_header.src_mac    <= ip_info.src_mac;
-                frame.mac_header.ether_type <= ETHER_TYPE;
-                // Construct the IP header
-                frame.ip_header.version         <= IP_VERSION;
-                frame.ip_header.ihl             <= IP_IHL;
-                frame.ip_header.type_of_service <= IP_TOS;
-                frame.ip_header.total_length    <= IP_BYTES;
-                frame.ip_header.identification  <= IP_ID;
-                frame.ip_header.flags           <= IP_FLAGS;
-                frame.ip_header.fragment_offset <= IP_FRAG_OFFSET;
-                frame.ip_header.time_to_live    <= IP_TTL;
-                frame.ip_header.protocol        <= IP_PROTOCOL;
-                frame.ip_header.header_checksum <= '0; // Computed later
-                frame.ip_header.src_ip          <= ip_info.src_ip;
-                frame.ip_header.dest_ip         <= ip_info.dest_ip;
-                // Construct the UDP header
-                frame.udp_header.src_port  <= ip_info.src_port;
-                frame.udp_header.dest_port <= ip_info.dest_port;
-                frame.udp_header.length    <= UDP_BYTES;
-                frame.udp_header.checksum  <= '0; // Computed later
-                // Add the data to the frame and zero the padding bytes
-                frame.data[8*(DATA_BYTES+PAD_BYTES)-1:8*PAD_BYTES] <= data;
-                if (PAD_BYTES > 0) begin
-                    frame.data[8*PAD_BYTES-1:0] <= '0;
-                end
-                // The CRC starts as all 1's
-                frame.fcs <= 32'hFFFFFFFF;
+                frame <= frame_hold;
                 // Others
                 ready <= 0;
                 state <= IP_CHECKSUM_1;
