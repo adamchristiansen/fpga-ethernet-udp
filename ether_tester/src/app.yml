@@ -15,6 +15,12 @@ args:
         help: The IP address, port, and MAC address of the host in the format of `iii.iii.iii.iii:ppppp,mm:mm:mm:mm:mm:mm` where the `i`s are IP address, `p`s are port, and `m`s are MAC address.
         required: true
         takes_value: true
+    - no-socket:
+        short: n
+        long: no-socket
+        help: Do not bind a socket to the port. This is useful for when another program will read the data on the socket.
+        multiple: true
+        global: true
     - reps:
         value_name: REPS
         short: r
