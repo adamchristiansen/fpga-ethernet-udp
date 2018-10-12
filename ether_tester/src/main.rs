@@ -103,14 +103,20 @@ fn main() {
     }
 
     // Bind a socket to the test system
-    let socket_addr = format!("{}:{}", params.dest_ip_string(), params.dest_port);
-    let socket = match UdpSocket::bind(socket_addr) {
-        Ok(s) => s,
-        Err(err) => fatal("Could not open socket", err.to_string())
+    let socket = if !params.no_socket {
+        let socket_addr = format!("{}:{}", params.dest_ip_string(), params.dest_port);
+        Some(match UdpSocket::bind(socket_addr) {
+            Ok(s) => {
+                if let Err(err) = s.set_read_timeout(Some(Duration::new(1, 0))) {
+                    fatal("Could not set socket read timeout", err.to_string())
+                }
+                s
+            },
+            Err(err) => fatal("Could not open socket", err.to_string())
+        })
+    } else {
+        None
     };
-    if let Err(err) = socket.set_read_timeout(Some(Duration::new(1, 0))) {
-        fatal("Could not set socket read timeout", err.to_string())
-    }
 
     println!("{}", title.paint("Results"));
     println!("{}", title.paint("-------"));
@@ -124,17 +130,26 @@ fn main() {
             .map_err(|err| err.to_string())
             // Read the incoming Ethernet data and compare it to the expected data
             .and_then(|_| {
-                // Read the packet
-                let mut buf = vec![0; params.bytes];
-                match socket.recv_from(&mut buf) {
-                    Ok((size, _socket_addr)) => verbose_compare(test_case.expected(), buf, size),
-                    Err(err) => Err(format!("Could not read socket: {}", err.to_string()))
+                if let Some(ref s) = socket {
+                    // Read the packet
+                    let mut buf = vec![0; params.bytes];
+                    match s.recv_from(&mut buf) {
+                        Ok((size, _socket_addr)) => verbose_compare(test_case.expected(), buf, size),
+                        Err(err) => Err(format!("Could not read socket: {}", err.to_string()))
+                    }
+                } else {
+                    // If the ethernet is not used then the test automatically passes
+                    Ok(())
                 }
             });
         // Print output
         match result {
             Ok(_) => if test_case.params.show_all {
-                println!("{}", success.paint(format!("Passed {}", i)));
+                if params.no_socket {
+                    println!("{}", success.paint("(No socket open)"));
+                } else {
+                    println!("{}", success.paint(format!("Passed {}", i)));
+                }
             },
             Err(msg) => {
                 num_failed += 1;
@@ -149,7 +164,11 @@ fn main() {
         println!("{}", fail.paint(format!("Failed {} of {} tests", num_failed, params.reps)));
     // else all tests passed
     } else if !params.show_all {
-        println!("{}", success.paint(format!("Passed all {} tests", params.reps)));
+        if !params.no_socket {
+            println!("{}", success.paint(format!("Passed all {} tests", params.reps)));
+        } else {
+            println!("{}", success.paint(format!("Ran {} tests (No socket open)", params.reps)));
+        }
     }
     println!();
 }

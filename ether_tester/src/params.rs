@@ -35,6 +35,9 @@ pub struct Params {
     /// The host MAC address.
     pub dest_mac: u64,
 
+    /// Indicates that no socket should be created.
+    pub no_socket: bool,
+
     /// The number of tests to run.
     pub reps: usize,
 
@@ -75,6 +78,7 @@ impl Params {
             dest_ip: dest_ip,
             dest_port: dest_port,
             dest_mac: dest_mac,
+            no_socket: parse_no_socket(&matches)?,
             reps: parse_reps(&matches)?,
             serial_port: serial_port,
             serial_baud: serial_baud,
@@ -195,6 +199,18 @@ fn parse_ip_port_mac(matches: &ArgMatches, name: String) -> Result<(u32, u16, u6
     return Ok((ip, port, mac))
 }
 
+/// Parse the no socket indicator.
+///
+/// # Arguments
+///
+/// * `matches` - The matches from the command line arguments.
+///
+/// # Returns
+///
+/// Whether a socket should be created or an error message.
+fn parse_no_socket(matches: &ArgMatches) -> Result<bool, String> {
+    Ok(matches.is_present("no-socket"))
+}
 /// Parse the number of repetitions.
 ///
 /// # Arguments
