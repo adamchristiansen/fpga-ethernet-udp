@@ -238,6 +238,9 @@ endinterface
 ///     data can be written until more packets are sent out.
 /// *   [clk25] is a 25 MHz clock signal used to write to the PHY.
 /// *   [eth] contains the signals used to write to the Ethernet PHY.
+/// *   [flush] causes any data in the queue to be sent even if it is less than
+///     [MIN_DATA_BYTES] long. This will only send a multiple of two bytes so
+///     this may not send all data.
 /// *   [ip_info] is the source and destination data that is needed to transmit
 /// *   [mac_busy] indicates that packet is currently being sent. Note that the
 ///     FIFO can still be written to when this is asserted. When this signal
@@ -261,6 +264,7 @@ module ethernet_udp_transmit #(
     // Ethernet
     input logic clk25,
     EthernetPHY.fwd eth,
+    input logic flush,
     IPInfo.in ip_info,
     output logic mac_busy,
     output logic ready);
@@ -285,6 +289,12 @@ module ethernet_udp_transmit #(
         end
         if (MAX_DATA_BYTES % WORD_SIZE_BYTES != 0) begin
             $error("MAX_DATA_BYTES must be a multiple of the WORD_SIZE_BYTES");
+        end
+        if (MIN_DATA_BYTES % 2 != 0) begin
+            $error("MIN_DATA_BYTES must be a multiple of 2");
+        end
+        if (MAX_DATA_BYTES % 2 != 0) begin
+            $error("MAX_DATA_BYTES must be a multiple of 2");
         end
     end
 
@@ -398,7 +408,8 @@ module ethernet_udp_transmit #(
     function int compute_payload_nibbles(int fifo_size);
         int temp = fifo_rd_data_count > MAX_DATA_NIBBLES ?
             MAX_DATA_NIBBLES : fifo_rd_data_count;
-        compute_payload_nibbles = temp - (temp % WORD_SIZE_NIBBLES);
+        compute_payload_nibbles =
+            {temp[31:2], 2'b00} - ({temp[31:2], 2'b00} % WORD_SIZE_NIBBLES);
     endfunction
 
     // Compute the number of padding nibbles from the number of nibbles in
@@ -415,15 +426,17 @@ module ethernet_udp_transmit #(
         localparam int S =
             MAC_HEADER_NIBBLES + IP_HEADER_NIBBLES + UDP_HEADER_NIBBLES;
 
-        // The padding must make the packet length a multiple of 4 bytes,
-        // which is 8 nibbles
-        compute_padding_nibbles = (8 - ((S + payload_nibbles) % 8)) % 8;
+        // The padding must make the packet length a multiple of 2 bytes,
+        // which is 4 nibbles
+        compute_padding_nibbles = 2 * ((S + payload_nibbles / 2) % 2);
+        $display("padding: %d", compute_padding_nibbles);
     endfunction
 
     // FIFO read signals
     logic [3:0] fifo_dout;
     logic [11:0] fifo_rd_data_count;
     logic fifo_rd_en;
+    logic fifo_rd_rst_busy;
 
     // The FIFO that allows data to cross clock domains to write data to the
     // PHY on a different clock.
@@ -441,7 +454,7 @@ module ethernet_udp_transmit #(
         .rd_clk(eth.tx_clk),
         .rd_data_count(fifo_rd_data_count),
         .rd_en(fifo_rd_en),
-        .rd_rst_busy(/* Unused */)
+        .rd_rst_busy(fifo_rd_rst_busy)
     );
 
 
@@ -522,7 +535,8 @@ module ethernet_udp_transmit #(
                 state <= READY;
             end
             // Send as soon as there is enough data in the FIFO
-            READY: if (fifo_rd_data_count >= MIN_DATA_NIBBLES) begin
+            READY: if (!fifo_rd_rst_busy &&
+                    (flush || fifo_rd_data_count >= MIN_DATA_NIBBLES)) begin
                 // Construct the Ethernet header
                 mac_header.dest_mac   <= ip_info.dest_mac;
                 mac_header.src_mac    <= ip_info.src_mac;

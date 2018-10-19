@@ -213,6 +213,7 @@ module main(
         // Ethernet
         .clk25(clk25),
         .eth(eth),
+        .flush(0),
         .ip_info(ip_info),
         .mac_busy(eth_mac_busy),
         .ready(/* Unused */)
