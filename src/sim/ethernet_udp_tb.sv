@@ -16,6 +16,9 @@ module ethernet_udp_tb();
     // Indicates that the Ethernet module is powered on and ready
     logic ready;
 
+    // Flushes the buffer
+    logic flush = 0;
+
     // The signals to the Ethernet PHY
     EthernetPHY eth();
     logic eth_ref_clk;
@@ -62,6 +65,7 @@ module ethernet_udp_tb();
         // Ethernet
         .clk25(clk25),
         .eth(eth),
+        .flush(flush),
         .ip_info(ip_info),
         .ready(ready)
     );
@@ -85,6 +89,23 @@ module ethernet_udp_tb();
         end
         wr_data <= '0;
         wr_en   <= 0;
+
+        // Flush the buffer
+        #500_000;
+        // Even though 3 bytes are queued, only 2 are sent because it is
+        // enforced that the payload is multiple of bytes 2 long.
+        for (int i = 0; i < 6; i++) begin
+            wr_data <= i % 2 ? '0 : (32 - 1 - i) / 2;
+            wr_en   <= 1;
+            // Wait for one clock cycle
+            #10;
+        end
+        wr_data <= '0;
+        wr_en   <= 0;
+        #200;
+        flush <= 1;
+        #200;
+        flush <= 0;
     end
 
     // The data is written to the PHY with the nibbles swapped (little endian
