@@ -2,9 +2,6 @@
 
 module ethernet_udp_tb();
 
-    // The parameters for the Ethernet nodule
-    localparam int DATA_BYTES = 16;
-
     // Create a 100 MHz clock
     logic clk = 0;
     always clk = #5 ~clk;
@@ -16,13 +13,8 @@ module ethernet_udp_tb();
     // The reset signal
     logic reset = 0;
 
-    // Create the data
-    logic [8*DATA_BYTES-1:0] data;
-    generate
-        for (genvar i = 0; i < DATA_BYTES; i++) begin
-            assign data[8*i+:8] = i;
-        end
-    endgenerate
+    // Indicates that the Ethernet module is powered on and ready
+    logic ready;
 
     // The signals to the Ethernet PHY
     EthernetPHY eth();
@@ -48,39 +40,69 @@ module ethernet_udp_tb();
     assign ip_info.dest_mac  = 48'h1a_2b_3c_4d_5e_6f;
     assign ip_info.dest_port = 16'h1000;
 
-    // The module control and status signals
-    logic ready;
-    logic send = 0;
+    // The signals to write data to the module
+    logic wr_en = 0;
+    logic [3:0] wr_data = '0;
 
-    // Instantiate the device under test
     ethernet_udp_transmit #(
         .CLK_RATIO(4),
-        .DATA_BYTES(DATA_BYTES),
+        .MAX_DATA_BYTES(480),
+        .MIN_DATA_BYTES(16),
         .POWER_UP_CYCLES(100),
-        .USE_UDP_CHECKSUM(1)) dut_ethernet_transmit_udp(
+        .WORD_SIZE_BYTES(1))
+    ethernet_udp_transmit(
+        // Standard
         .clk(clk),
         .reset(reset),
+        // Writing data
+        .wr_en(wr_en),
+        .wr_data(wr_data),
+        .wr_rst_busy(/* Unused */),
+        .wr_full(/* Unused */),
+        // Ethernet
         .clk25(clk25),
-        .data(data),
         .eth(eth),
         .ip_info(ip_info),
-        .ready(ready),
-        .send(send)
+        .ready(ready)
     );
 
+    // Run the test
     initial begin
         // Reset the module
         reset <= 1;
 
-        // Wait a while before deassertiung the reset
+        // Wait a while before deasserting the reset
         #100;
         reset <= 0;
 
         // Send the data
         #5000;
-        send <= 1;
-        #100;
-        send <= 0;
+        for (int i = 0; i < 32; i++) begin
+            wr_data <= i % 2 ? '0 : (32 - 1 - i) / 2;
+            wr_en   <= 1;
+            // Wait for one clock cycle
+            #10;
+        end
+        wr_data <= '0;
+        wr_en   <= 0;
+    end
+
+    // The data is written to the PHY with the nibbles swapped (little endian
+    // nibble order), so this flip flop inverts the nibbles and prints out the
+    // bytes that were sent in big endian nibbles order.
+    logic [7:0] rdata = '0;
+    logic upper = 0;
+    always_ff @(posedge eth.tx_clk) begin
+        if (eth.tx_en) begin
+            if (upper) begin
+                rdata[7:4] = eth.tx_d;
+                upper = 0;
+                $display("%2H", rdata);
+            end else begin
+                rdata[3:0] = eth.tx_d;
+                upper = 1;
+            end
+        end
     end
 
 endmodule

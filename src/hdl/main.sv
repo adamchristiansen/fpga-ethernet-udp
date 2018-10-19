@@ -130,7 +130,7 @@ module main(
     // The data to be sent in a UDP packet.
     logic unsigned [8*DATA_BYTES-1:0] eth_data;
 
-    // Indicates that the current data should be sent over UDP.
+    // Starts writing data to the Ethernet module
     logic send_eth;
 
     // When there is new data from the UART, prepare the data to be sent over
@@ -147,6 +147,32 @@ module main(
             send_eth <= 1;
         end else begin
             send_eth <= 0;
+        end
+    end
+
+    // The signals for writing to the MAC
+    logic [3:0] wr_data;
+    logic wr_en;
+
+    // The index in the data that is being written to the MAC
+    int wr_i;
+
+    // Write the data to the MAC
+    always_ff @(posedge clk) begin
+        if (reset) begin
+            wr_data <= '0;
+            wr_en   <= 0;
+            wr_i    <= -1;
+        end else if (wr_i >= 0) begin
+            wr_data <= eth_data[8 * (wr_i >> 1) + 4 * ((~wr_i) & 1)+:4];
+            wr_en   <= 1;
+            wr_i    <= wr_i - 1;
+        end else if (send_eth) begin
+            wr_en <= 0;
+            wr_i  <= 2 * DATA_BYTES - 1;
+        end else begin
+            wr_en <= 0;
+            wr_i  <= -1;
         end
     end
 
@@ -167,32 +193,40 @@ module main(
     assign ip_info.dest_mac  = params.dest_mac;
     assign ip_info.dest_port = params.dest_port;
 
-    // Indicates the Ethernet module is ready to send data
-    logic eth_ready;
+    // Indicates the Ethernet module is busy writing to the PHY
+    logic eth_mac_busy;
 
-    ethernet_udp_transmit #(.CLK_RATIO(4), .DATA_BYTES(DATA_BYTES))
+    ethernet_udp_transmit #(
+        .CLK_RATIO(4),
+        .MIN_DATA_BYTES(DATA_BYTES),
+        .POWER_UP_CYCLES(5_000_000),
+        .WORD_SIZE_BYTES(1))
     ethernet_udp_transmit(
         // Standard
         .clk(clk),
         .reset(reset),
+        // Writing data
+        .wr_en(wr_en),
+        .wr_data(wr_data),
+        .wr_rst_busy(/* Unused */),
+        .wr_full(/* Unused */),
         // Ethernet
         .clk25(clk25),
-        .data(eth_data),
         .eth(eth),
         .ip_info(ip_info),
-        .ready(eth_ready),
-        .send(send_eth)
+        .mac_busy(eth_mac_busy),
+        .ready(/* Unused */)
     );
 
     // When eth_ready rises, increment the LED counter
-    logic eth_ready_prev;
+    logic eth_mac_busy_prev;
     always_ff @(posedge clk) begin
         if (reset) begin
-            eth_ready_prev <= 1;
-            led            <= '0;
+            eth_mac_busy_prev <= 0;
+            led               <= '0;
         end else begin
-            eth_ready_prev <= eth_ready;
-            if (!eth_ready_prev && eth_ready) begin
+            eth_mac_busy_prev <= eth_mac_busy;
+            if (eth_mac_busy_prev && !eth_mac_busy) begin
                 led <= led + 1;
             end
         end
