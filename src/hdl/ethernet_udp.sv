@@ -167,9 +167,27 @@ endinterface
 /// This module implements a transmitter for an Ethernet port. This is used to
 /// send UDP packets using IPv4.
 ///
-/// The [DATA_BYTES] parameter describes the maximum width (in bytes) that the
-/// module should be prepared to transmit through the [data] port. Here is a
-/// summary of the most important information sourced from RFCs.
+/// This module is optimal for streaming fixed width data. It offers a number
+/// guarantees.
+///
+/// *   The packet alwaus contains an integer number of data points
+/// *   The packet will always have a number of data points between a specified
+///     minimum and maximum valuem so as to not add overhead on small packets or
+///     produce packets too large for a network to handle.
+///
+/// Data is written into a FIFO as nibbles, and the packets are constructed
+/// vased on that data. The MAC, IP, and UDP headersm and the MAC FCS are
+/// automatically generated. The data in the FIFO is read as nibbles, where
+/// one data point is equal to the number of nibbles required to make data of
+/// width WORD_SIZE_BYTES (in bytes).
+///
+/// When a data point is written to the FIFO, it must be written from most
+/// significant byte to least significant byte, with the lower nibble of each
+/// byte first. For example, suppose (in hex) 1A2B3C4D is to be written, each
+/// it should be written as the following nibbles: A1B2C3D4.
+///
+/// The MAX_DATA_BYTES should not exceeed 508 based on the following
+/// reasoning.
 ///
 /// *   RFC 768: a UDP header is 8 bytes.
 /// *   RFC 791: the maximum sized internet header is 60 bytes.
@@ -192,49 +210,60 @@ endinterface
 ///         CLK_RATIO = ceil(rate(clk) / rate(clk25))
 ///
 ///     This implies a minimum value of 1.
-/// *   [DATA_BYTES] is the width in bytes to be transmitted in the payload of
-///     each UDP packet.
+/// *   [MAX_DATA_BYTES] is the maximum number of payload bytes that will be
+///     sent in a packet.
+/// *   [MIN_DATA_BYTES] is the minimum number of bytes that must exist in the
+///     FIFO before a packet is automatically sent. This is also the minimum
+///     number of payload bytes that will be sent in a packet.
 /// *   [POWER_UP_CYCLES] is the number of clock cycles to wait at power up
 ///     before the PHY is ready. This must be at least 167 ms worth of time.
 ///     The default value is set appropriately for a 25 MHz [clk]. Setting
 ///     this to 0 or a negative number disables the wait at powerup, but the
 ///     PHY will not be initialized properly. Disabling the startup check is
 ///     only really useful in simulation.
-/// *   [USE_UDP_CHECKSUM] governs whether the module generates a UDP
-///     checksum. In IPv4, the UDP checksum is optional. Generating a UDP
-///     checksum decreases the module throughput by up to 20%, but allows
-///     safer transmission. The default is to use the checksum.
+/// *   [WORD_SIZE_BYTES] is the number of bytes in a word of data. It is
+///     guaranteed that the payload is multiple of this number of bytes. This
+///     is also the size of one data point in the payload.
 ///
 /// # Ports
 ///
 /// *   [clk] is the system clock.
 /// *   [reset] is the system reset signal.
+/// *   [wr_en] indicates that the data on [wr_data] is valid and should be
+///     written. While this is asserted high data on [wr_data] is read in.
+/// *   [wr_data] is the input data bus for the payload data.
+/// *   [wr_rst_busy] indicates that the FIFO is in a reset state when asserted
+///     high.
+/// *   [wr_full] means that the input FIFO is full when asserted high and no
+///     data can be written until more packets are sent out.
 /// *   [clk25] is a 25 MHz clock signal used to write to the PHY.
-/// *   [data] is the bus of data to be transmitted over the port.
 /// *   [eth] contains the signals used to write to the Ethernet PHY.
 /// *   [ip_info] is the source and destination data that is needed to transmit
-///     the packet.
-/// *   [send] is a rising edge active signal that starts sending the [data].
-/// *   [data] to be sent in the current packet. Set this to 0 to always send
-///     the entire [data] register.
-/// *   [ready] indicates that the module is ready to accept a [send] signal to
-///     transmit more data. This is held high while ready and falls when the
-/// *   [send] signal rises.
+/// *   [mac_busy] indicates that packet is currently being sent. Note that the
+///     FIFO can still be written to when this is asserted. When this signal
+///     falls a packet has finished sending.
+/// *   [ready] indicates that the module is powered up and ready to
+///     communicate with the PHY when asserted high.
 module ethernet_udp_transmit #(
     parameter int CLK_RATIO = 0,
-    parameter int DATA_BYTES = 0,
+    parameter int MAX_DATA_BYTES = 508,
+    parameter int MIN_DATA_BYTES = 256,
     parameter int POWER_UP_CYCLES = 5_000_000,
-    parameter int USE_UDP_CHECKSUM = 1) (
+    parameter int WORD_SIZE_BYTES = 0) (
     // Standard
     input logic clk,
     input logic reset,
+    // Writing data
+    input logic wr_en,
+    input logic [3:0] wr_data,
+    output logic wr_rst_busy,
+    output logic wr_full,
     // Ethernet
     input logic clk25,
-    input logic [8*DATA_BYTES-1:0] data,
     EthernetPHY.fwd eth,
     IPInfo.in ip_info,
-    output logic ready,
-    input logic send);
+    output logic mac_busy,
+    output logic ready);
 
     // Assert that the parameters are appropriate
     initial begin
@@ -242,50 +271,41 @@ module ethernet_udp_transmit #(
         if (CLK_RATIO < 2) begin
             $error("CLK_RATIO must be set to at least 1.");
         end
-        // Check that the DATA_BYTES is set appropriately
-        if (DATA_BYTES <= 0) begin
-            $error("DATA_BYTES must be set to a positive number.");
+        // Check that the word size is set appropriately
+        if (WORD_SIZE_BYTES <= 0) begin
+            $error("WORD_SIZE_BYTES must be positive");
         end
-        if (DATA_BYTES > 508) begin
-            $error("DATA_BYTES must be less than or equal to 508.");
+        // Check that the min and max data byte counts are set appropriately
+        if (MIN_DATA_BYTES > MAX_DATA_BYTES) begin
+            $error("MIN_DATA_BYTES must be less than MAX_DATA_BYTES");
         end
-        // Check that the  divider is set appropriately
-        if (USE_UDP_CHECKSUM != 0 && USE_UDP_CHECKSUM != 1) begin
-            $error("USE_UDP_CHECKSUM must be set to 0 or 1.");
+        if (MIN_DATA_BYTES % WORD_SIZE_BYTES != 0 ||
+            MIN_DATA_BYTES < WORD_SIZE_BYTES) begin
+            $error("MIN_DATA_BYTES must be a multiple of WORD_SIZE_BYTES");
+        end
+        if (MAX_DATA_BYTES % WORD_SIZE_BYTES != 0) begin
+            $error("MAX_DATA_BYTES must be a multiple of the WORD_SIZE_BYTES");
         end
     end
 
+    // The parameters in nibbles
+    localparam int unsigned MIN_DATA_NIBBLES  = 2 * MIN_DATA_BYTES;
+    localparam int unsigned MAX_DATA_NIBBLES  = 2 * MAX_DATA_BYTES;
+    localparam int unsigned WORD_SIZE_NIBBLES = 2 * WORD_SIZE_BYTES;
+
     // The number of bytes in parts of the frame.
     localparam int unsigned PREAMBLE_SFD_BYTES = 8;
-    localparam int unsigned MAC_HEADER_BYTES = 14;
-    localparam int unsigned IP_HEADER_BYTES = 20;
-    localparam int unsigned UDP_HEADER_BYTES = 8;
-    localparam int unsigned FCS_BYTES = 4;
-
-    // The total number of bytes in the UDP packet.
-    localparam int unsigned UDP_BYTES = UDP_HEADER_BYTES + DATA_BYTES;
-
-    // The total number of bytes in the IP packet.
-    localparam int unsigned IP_BYTES = IP_HEADER_BYTES + UDP_BYTES;
-
-    // The number of bytes that need to be added to frame so that it is
-    // a multiple of 4 bytes long. This is added between the data and the FCS.
-    localparam int unsigned PAD_BYTES =
-        (4 - ((MAC_HEADER_BYTES + IP_BYTES) % 4)) % 4;
+    localparam int unsigned MAC_HEADER_BYTES   = 14;
+    localparam int unsigned IP_HEADER_BYTES    = 20;
+    localparam int unsigned UDP_HEADER_BYTES   = 8;
+    localparam int unsigned FCS_BYTES          = 4;
 
     // The number of nibbles in parts of the frame
     localparam int unsigned PREAMBLE_SFD_NIBBLES = 2 * PREAMBLE_SFD_BYTES;
-    localparam int unsigned MAC_HEADER_NIBBLES = 2 * MAC_HEADER_BYTES;
-    localparam int unsigned IP_HEADER_NIBBLES = 2 * IP_HEADER_BYTES;
-    localparam int unsigned UDP_HEADER_NIBBLES = 2 * UDP_HEADER_BYTES;
-    localparam int unsigned DATA_NIBBLES = 2 * DATA_BYTES;
-    localparam int unsigned PAD_NIBBLES = 2 * PAD_BYTES;
-    localparam int unsigned FCS_NIBBLES = 2 * FCS_BYTES;
-
-    // The number of nibbles in the frame (not counting the preamble and SFD).
-    localparam int unsigned FRAME_NIBBLES = MAC_HEADER_NIBBLES +
-        IP_HEADER_NIBBLES + UDP_HEADER_NIBBLES + DATA_NIBBLES + PAD_NIBBLES +
-        FCS_NIBBLES;
+    localparam int unsigned MAC_HEADER_NIBBLES   = 2 * MAC_HEADER_BYTES;
+    localparam int unsigned IP_HEADER_NIBBLES    = 2 * IP_HEADER_BYTES;
+    localparam int unsigned UDP_HEADER_NIBBLES   = 2 * UDP_HEADER_BYTES;
+    localparam int unsigned FCS_NIBBLES          = 2 * FCS_BYTES;
 
     // The number of write cycles to wait after writing data to the PHY. This
     // must be at least 12 bytes worth of time.
@@ -319,24 +339,6 @@ module ethernet_udp_transmit #(
     // The IP next level protocol to use. This is the User Datagram Protocol.
     localparam int unsigned IP_PROTOCOL = 8'h11;
 
-    // The number of bits to contribute to the FCS on each round.
-    localparam int unsigned FCS_STEP = 4;
-
-    // This structure represents a frame to be sent. The padding bytes are
-    // added to the data section of the packet.
-    typedef struct packed {
-        MACHeader mac_header;
-        IPHeader ip_header;
-        UDPHeader udp_header;
-        logic [8*(DATA_BYTES+PAD_BYTES)-1:0] data;
-        logic [31:0] fcs;
-    } Frame;
-
-    // The frame to send and the frame that is latched on the master clock to
-    // cross clock domains.
-    Frame frame;
-    Frame frame_hold;
-
     // Forward the 25 MHz clock to the PHY
     assign eth.ref_clk = clk25;
 
@@ -352,12 +354,12 @@ module ethernet_udp_transmit #(
     // The next CRC value.
     function logic [31:0] compute_crc(
         input logic [31:0] crc,
-        input logic [FCS_STEP-1:0] data);
+        input logic [3:0] data);
 
         localparam int unsigned POLYNOMIAL = 32'h04C11DB7;
 
         compute_crc = crc;
-        for (int j = 0; j < FCS_STEP; j++) begin
+        for (int j = 0; j < 4; j++) begin
             compute_crc = {compute_crc[30:0], 1'b0} ^
                 (data[j] == compute_crc[31] ? '0 : POLYNOMIAL);
         end
@@ -383,84 +385,82 @@ module ethernet_udp_transmit #(
         swap_nibbles[0+:4]  = data[4+:4];
     endfunction
 
-    // The signal that is latched on the master clock to tell the system to
-    // latch the inputs and start sending data. This needs to be held for at
-    // least [CLK_RATIO] clock cycles.
-    logic send_hold;
+    // Compute the number of payload nibbles from the number of nibbles in
+    // the fifo.
+    //
+    // # Arguments
+    //
+    // * [fifo_nibbles] is the number of nibbles in the fifo.
+    //
+    // # Returns
+    //
+    // The number of payload nibbles.
+    function int compute_payload_nibbles(int fifo_size);
+        int temp = fifo_rd_data_count > MAX_DATA_NIBBLES ?
+            MAX_DATA_NIBBLES : fifo_rd_data_count;
+        compute_payload_nibbles = temp - (temp % WORD_SIZE_NIBBLES);
+    endfunction
 
-    // The counter that makes sure the start signal is held for the
-    // appropriate number of cycles.
-    int send_counter;
+    // Compute the number of padding nibbles from the number of nibbles in
+    // the payload.
+    //
+    // # Arguments
+    //
+    // * [payload_nibbles] is the number of nibbles in the payload.
+    //
+    // # Returns
+    //
+    // The number of padding nibbles that are required.
+    function int compute_padding_nibbles(int payload_nibbles);
+        localparam int S =
+            MAC_HEADER_NIBBLES + IP_HEADER_NIBBLES + UDP_HEADER_NIBBLES;
 
-    // The previous value of the [send] input. This is used for synchronous
-    // edge detection.
-    logic send_prev;
+        // The padding must make the packet length a multiple of 4 bytes,
+        // which is 8 nibbles
+        compute_padding_nibbles = (8 - ((S + payload_nibbles) % 8)) % 8;
+    endfunction
 
-    // Run some control logic against the master clock.
-    always_ff @(posedge clk) begin
-        if (reset) begin
-            frame_hold <= '0;
-            // The previous [send] value is set to 1 to prevent a false
-            // positive on a rising edge after a reset.
-            send_prev    <= 1;
-            send_counter <= '0;
-        end else begin
-            send_prev <= send;
-            // While send_counter is non-zero start is asserted high
-            if (send_counter > 0) begin
-                send_counter <= send_counter - 1;
-            end else if (!send_hold && ready && !send_prev && send) begin
-                // Construct the Ethernet header
-                frame_hold.mac_header.dest_mac   <= ip_info.dest_mac;
-                frame_hold.mac_header.src_mac    <= ip_info.src_mac;
-                frame_hold.mac_header.ether_type <= ETHER_TYPE;
-                // Construct the IP header
-                frame_hold.ip_header.version         <= IP_VERSION;
-                frame_hold.ip_header.ihl             <= IP_IHL;
-                frame_hold.ip_header.type_of_service <= IP_TOS;
-                frame_hold.ip_header.total_length    <= IP_BYTES;
-                frame_hold.ip_header.identification  <= IP_ID;
-                frame_hold.ip_header.flags           <= IP_FLAGS;
-                frame_hold.ip_header.fragment_offset <= IP_FRAG_OFFSET;
-                frame_hold.ip_header.time_to_live    <= IP_TTL;
-                frame_hold.ip_header.protocol        <= IP_PROTOCOL;
-                frame_hold.ip_header.header_checksum <= '0; // Computed later
-                frame_hold.ip_header.src_ip          <= ip_info.src_ip;
-                frame_hold.ip_header.dest_ip         <= ip_info.dest_ip;
-                // Construct the UDP header
-                frame_hold.udp_header.src_port  <= ip_info.src_port;
-                frame_hold.udp_header.dest_port <= ip_info.dest_port;
-                frame_hold.udp_header.length    <= UDP_BYTES;
-                frame_hold.udp_header.checksum  <= '0; // Computed later
-                // Add the data to the frame and zero the padding bytes
-                frame_hold.data[8*(DATA_BYTES+PAD_BYTES)-1:8*PAD_BYTES] <= data;
-                if (PAD_BYTES > 0) begin
-                    frame_hold.data[8*PAD_BYTES-1:0] <= '0;
-                end
-                // The CRC starts as all 1's
-                frame_hold.fcs <= 32'hFFFFFFFF;
+    // FIFO read signals
+    logic [3:0] fifo_dout;
+    logic [11:0] fifo_rd_data_count;
+    logic fifo_rd_en;
 
-                // Although the start signal only needs to be high for
-                // a number of clock cycles equal to the divider, just to be
-                // safe it is made to twice the divider.
-                send_counter <= 2 * CLK_RATIO;
-            end
-        end
-    end
-    // The send signal is held while the counter is non-zero
-    assign send_hold = |send_counter;
+    // The FIFO that allows data to cross clock domains to write data to the
+    // PHY on a different clock.
+    fifo_async_4 fifo_async_4(
+        .rst(reset),
+        // Write
+        .din(wr_data),
+        .full(wr_full),
+        .wr_clk(clk),
+        .wr_en(wr_en),
+        .wr_rst_busy(wr_rst_busy),
+        // Read
+        .dout(fifo_dout),
+        .empty(/* Unused */),
+        .rd_clk(eth.tx_clk),
+        .rd_data_count(fifo_rd_data_count),
+        .rd_en(fifo_rd_en),
+        .rd_rst_busy(/* Unused */)
+    );
+
 
     // This enum is used to track the progress of a state machine that writes
     // the data to the PHY.
     enum {
         POWER_UP,
         READY,
+        PREPARE,
+        LENGTHS,
         IP_CHECKSUM_1,
         IP_CHECKSUM_2,
-        UDP_CHECKSUM_1,
-        UDP_CHECKSUM_2,
         SEND_PREAMBLE_SFD,
-        SEND_FRAME,
+        SEND_MAC_HEADER,
+        SEND_IP_HEADER,
+        SEND_UDP_HEADER,
+        SEND_PAYLOAD,
+        SEND_PADDING,
+        SEND_FCS,
         WAIT
     } state;
 
@@ -472,17 +472,42 @@ module ethernet_udp_transmit #(
     // computing the IP header checksum and UDP checksum.
     int unsigned checksum_temp;
 
+    // The headers that are to be sent
+    MACHeader mac_header;
+    IPHeader ip_header;
+    UDPHeader udp_header;
+
+    // The frame check (CRC) sequence for the Ethernet packet
+    logic [31:0] fcs;
+
+    // The number of data nibbles that will be sent in the current packet
+    int payload_nibbles;
+
+    // The number of nibbles that need to be sent to pad the packet length
+    int padding_nibbles;
+
+    // From a [vector] grab a nibble at the given index. The order of the
+    // nibbles in each byte that are selected is reversed.
+    `define SLICE(vector, index) \
+        vector[8 * (index >> 1) + 4 * ((~index) & 1)+:4]
+
     // Run the state machine that sends that data to the PHY against the
     // transmit clock.
     always_ff @(negedge eth.tx_clk) begin
         if (reset) begin
-            eth.rstn  <= 0;
-            eth.tx_d  <= '0;
-            eth.tx_en <= 0;
-            frame     <= '0;
-            i         <= '0;
-            ready     <= 0;
-            state     <= POWER_UP;
+            eth.rstn        <= 0;
+            eth.tx_d        <= '0;
+            eth.tx_en       <= 0;
+            mac_header      <= '0;
+            ip_header       <= '0;
+            udp_header      <= '0;
+            fcs             <= '0;
+            i               <= '0;
+            mac_busy        <= 0;
+            padding_nibbles <= '0;
+            payload_nibbles <= '0;
+            ready           <= 0;
+            state           <= POWER_UP;
         end else begin
             // No longer need to reset
             eth.rstn <= 1;
@@ -496,75 +521,73 @@ module ethernet_udp_transmit #(
                 ready <= 1;
                 state <= READY;
             end
-            // Latch the data
-            READY: if (send_hold) begin
-                frame <= frame_hold;
+            // Send as soon as there is enough data in the FIFO
+            READY: if (fifo_rd_data_count >= MIN_DATA_NIBBLES) begin
+                // Construct the Ethernet header
+                mac_header.dest_mac   <= ip_info.dest_mac;
+                mac_header.src_mac    <= ip_info.src_mac;
+                mac_header.ether_type <= ETHER_TYPE;
+                // Construct the IP header
+                ip_header.version         <= IP_VERSION;
+                ip_header.ihl             <= IP_IHL;
+                ip_header.type_of_service <= IP_TOS;
+                ip_header.total_length    <= '0; // Computed later
+                ip_header.identification  <= IP_ID;
+                ip_header.flags           <= IP_FLAGS;
+                ip_header.fragment_offset <= IP_FRAG_OFFSET;
+                ip_header.time_to_live    <= IP_TTL;
+                ip_header.protocol        <= IP_PROTOCOL;
+                ip_header.header_checksum <= '0; // Computed later
+                ip_header.src_ip          <= ip_info.src_ip;
+                ip_header.dest_ip         <= ip_info.dest_ip;
+                // Construct the UDP header
+                udp_header.src_port  <= ip_info.src_port;
+                udp_header.dest_port <= ip_info.dest_port;
+                udp_header.length    <= '0; // Computed later
+                udp_header.checksum  <= '0; // Optional, left as 0
+                // The CRC starts as all 1's
+                fcs <= 32'hFFFFFFFF;
+                // The number of nibbles to send in the payload
+                payload_nibbles <= compute_payload_nibbles(fifo_rd_data_count);
                 // Others
-                ready <= 0;
-                state <= IP_CHECKSUM_1;
+                mac_busy <= 1;
+                state    <= PREPARE;
+            end
+            // Compute the nimber of padding nibbles to add
+            PREPARE: begin
+                padding_nibbles <= compute_padding_nibbles(payload_nibbles);
+                state           <= LENGTHS;
+            end
+            // Compute the IP and UDP lengths
+            LENGTHS: begin
+                ip_header.total_length <=
+                    IP_HEADER_BYTES + UDP_HEADER_BYTES + (payload_nibbles / 2);
+                udp_header.length <= UDP_HEADER_BYTES + (payload_nibbles / 2);
+                state             <= IP_CHECKSUM_1;
             end
             // Compute the IP header checksum
             IP_CHECKSUM_1: begin
-                // Note that the header checksum field
-                // `frame.ip_header[64+:16]` is not included.
+                // Note that the header checksum field `ip_header[64+:16]` is
+                // not included.
                 checksum_temp <=
-                    frame.ip_header[144+:16] + // Version, IHL, ToS
-                    frame.ip_header[128+:16] + // Total length
-                    frame.ip_header[112+:16] + // Identification
-                    frame.ip_header[ 96+:16] + // Flags, Fragmentation offset
-                    frame.ip_header[ 80+:16] + // TTL, Protocol
-                    frame.ip_header[ 48+:16] + // Source IP Upper
-                    frame.ip_header[ 32+:16] + // Source IP Lower
-                    frame.ip_header[ 16+:16] + // Destination IP Upper
-                    frame.ip_header[  0+:16];  // Destination IP Lower
+                    ip_header[144+:16] + // Version, IHL, ToS
+                    ip_header[128+:16] + // Total length
+                    ip_header[112+:16] + // Identification
+                    ip_header[ 96+:16] + // Flags, Fragmentation offset
+                    ip_header[ 80+:16] + // TTL, Protocol
+                    ip_header[ 48+:16] + // Source IP Upper
+                    ip_header[ 32+:16] + // Source IP Lower
+                    ip_header[ 16+:16] + // Destination IP Upper
+                    ip_header[  0+:16];  // Destination IP Lower
                 // Others
                 state <= IP_CHECKSUM_2;
             end
             IP_CHECKSUM_2: begin
-                frame.ip_header.header_checksum <=
+                ip_header.header_checksum <=
                     ~(checksum_temp[31:16] + checksum_temp[15:0]);
                 // Others
                 i     <= '0;
-                state <= USE_UDP_CHECKSUM ? UDP_CHECKSUM_1 : SEND_PREAMBLE_SFD;
-            end
-            UDP_CHECKSUM_1: begin
-                checksum_temp <=
-                    // Contribute the UDP pseudo header to the UDP checksum
-                    //  0      7 8     15 16    23 24    31
-                    // +--------+--------+--------+--------+
-                    // |          Source Address           |
-                    // +--------+--------+--------+--------+
-                    // |        Destination Address        |
-                    // +--------+--------+--------+--------+
-                    // |  Zero  |Protocol|   UDP Length    |
-                    // +--------+--------+--------+--------+
-                    frame.ip_header.src_ip[16+:16] +
-                    frame.ip_header.src_ip[0+:16] +
-                    frame.ip_header.dest_ip[16+:16] +
-                    frame.ip_header.dest_ip[0+:16] +
-                    {8'h00, frame.ip_header.protocol} +
-                    frame.udp_header.length +
-                    // Contribute the UDP header. Note that the UDP checksum
-                    // is not included in the calculation.
-                    frame.udp_header.src_port +
-                    frame.udp_header.dest_port +
-                    frame.udp_header.length;
-                // Others
-                i     <= '0;
-                state <= UDP_CHECKSUM_2;
-            end
-            UDP_CHECKSUM_2: begin
-                // Contribute the data to UDP checksum
-                if (i < (DATA_BYTES + PAD_BYTES) / 2) begin
-                    checksum_temp <= checksum_temp + {16'h0000, frame.data[16*i+:16]};
-                    i             <= i + 1;
-                end else begin
-                    frame.udp_header.checksum <=
-                        ~(checksum_temp[31:16] + checksum_temp[15:0]);
-                    // Others
-                    i     <= '0;
-                    state <= SEND_PREAMBLE_SFD;
-                end
+                state <= SEND_PREAMBLE_SFD;
             end
             // Send the preamble and SFD to the PHY
             SEND_PREAMBLE_SFD: begin
@@ -574,76 +597,90 @@ module ethernet_udp_transmit #(
                 if (i < PREAMBLE_SFD_NIBBLES - 1) begin
                     i <= i + 1;
                 end else begin
-                    i     <= FRAME_NIBBLES - 1;
-                    state <= SEND_FRAME;
+                    i     <= MAC_HEADER_NIBBLES - 1;
+                    state <= SEND_MAC_HEADER;
                 end
             end
-            // Send the frame to the PHY. Note that this loop counts down
-            SEND_FRAME: if (i >= 0) begin
-                // Select the current nibble. This selects nibbles according
-                // to the following diagram. Suppose there are 3 bytes, their
-                // nibble indices are like the following.
-                //
-                //      23:20    19:16   15:12    11:8      7:4     3:0
-                //        <--------+
-                //        +------------------------->
-                //                         <--------+
-                //                         +------------------------->
-                //                                         <---------+
-                // Index: 4       5        2        3        0       1
-                // Order: 1       0        3        2        5       4
-                //
-                // These are sent in order from highest index to lowest. This
-                // directive expands to the indexer that will be used for this.
-                `define SLICE \
-                    8 * (i >> 1) + FCS_STEP * ((~i) & 1)+:FCS_STEP
-                // Contribute the nibble to the FCS by manually doing the
-                // division
-                if (i >= FCS_NIBBLES) begin
-                    // Contribute the nibble to the CRC. When i is equal to
-                    // FCS_NIBBLES, this is the case where the last nibble is
-                    // contributed to the FCS. At this stage, the FCS_NIBBLES
-                    // are swapped.
-                    if (i == FCS_NIBBLES) begin
-                        frame.fcs <= swap_nibbles(compute_crc(
-                            frame.fcs, frame[`SLICE]));
-                    end else begin
-                        frame.fcs <= compute_crc(frame.fcs, frame[`SLICE]);
-                    end
-                    // Send the nibble
-                    eth.tx_d <= frame[`SLICE];
+            SEND_MAC_HEADER: begin
+                eth.tx_d <= `SLICE(mac_header, i);
+                fcs      <= compute_crc(fcs, `SLICE(mac_header, i));
+                if (i > 0) begin
+                    i <= i - 1;
                 end else begin
-                    // The FCS has been computed and these remaining nibbles
-                    // are the nibbles of the FCS.
-
-                    // Get the current nibble and take the one's complement,
-                    // then reverse the order of the bits, then send the new
-                    // nibble
-                    eth.tx_d <= {<<bit{~frame[`SLICE]}};
-                    // Assign the reversed bits back to the frame. This is
-                    // only really useful for the simulator since these bits
-                    // are not read again.
-                    frame[`SLICE] <= {<<bit{~frame[`SLICE]}};
+                    i     <= IP_HEADER_NIBBLES - 1;
+                    state <= SEND_IP_HEADER;
                 end
-                // Others
-                i <= i - 1;
-                `undef SLICE
+            end
+            SEND_IP_HEADER: begin
+                eth.tx_d <= `SLICE(ip_header, i);
+                fcs      <= compute_crc(fcs, `SLICE(ip_header, i));
+                if (i > 0) begin
+                    i <= i - 1;
+                end else begin
+                    i     <= UDP_HEADER_NIBBLES - 1;
+                    state <= SEND_UDP_HEADER;
+                end
+            end
+            SEND_UDP_HEADER: begin
+                eth.tx_d <= `SLICE(udp_header, i);
+                fcs      <= compute_crc(fcs, `SLICE(udp_header, i));
+                if (i > 0) begin
+                    i <= i - 1;
+                end else begin
+                    fifo_rd_en <= 1;
+                    i          <= payload_nibbles - 1;
+                    state      <= SEND_PAYLOAD;
+                end
+            end
+            SEND_PAYLOAD: begin
+                eth.tx_d <= fifo_dout;
+                if (i > 0) begin
+                    fcs <= compute_crc(fcs, fifo_dout);
+                    i   <= i - 1;
+                end else begin
+                    if (padding_nibbles != 0) begin
+                        fcs        <= compute_crc(fcs, fifo_dout);
+                        fifo_rd_en <= 0;
+                        i          <= padding_nibbles - 1;
+                        state      <= SEND_PADDING;
+                    end else begin
+                        fcs <=
+                            swap_nibbles(compute_crc(fcs, fifo_dout));
+                        fifo_rd_en <= 0;
+                        i          <= FCS_NIBBLES - 1;
+                        state      <= SEND_FCS;
+                    end
+                end
+            end
+            SEND_PADDING: if (i > 0) begin
+                fcs      <= compute_crc(fcs, '0);
+                eth.tx_d <= '0;
+                i        <= i - 1;
             end else begin
-                eth.tx_d  <= '0;
-                eth.tx_en <= 0;
-                i         <= '0;
-                state     <= WAIT;
-                $display("---- BEGIN FRAME ----");
-                $display("%h", frame);
-                $display("---- END FRAME ----");
+                fcs   <= swap_nibbles(compute_crc(fcs, '0));
+                i     <= FCS_NIBBLES - 1;
+                state <= SEND_FCS;
+            end
+            SEND_FCS: begin
+                // Get the current nibble and take the one's complement, then
+                // reverse the order of the bits, then send the new nibble.
+                eth.tx_d <= {<<bit{~`SLICE(fcs, i)}};
+                if (i > 0) begin
+                    i <= i - 1;
+                end else begin
+                    i         <= '0;
+                    state     <= WAIT;
+                end
             end
             // Wait the appropriate time for the Ethernet interframe gap
             WAIT: if (i < GAP_NIBBLES) begin
-                i <= i + 1;
+                eth.tx_d  <= '0;
+                eth.tx_en <= 0;
+                i         <= i + 1;
             end else begin
-                i     <= '0;
-                ready <= 1;
-                state <= READY;
+                i        <= '0;
+                mac_busy <= 0;
+                state    <= READY;
             end
             endcase
         end
