@@ -193,6 +193,9 @@ module main(
     assign ip_info.dest_mac  = params.dest_mac;
     assign ip_info.dest_port = params.dest_port;
 
+    // Indicates that the module has finished the startup sequence
+    logic eth_ready;
+
     // Indicates the Ethernet module is busy writing to the PHY
     logic eth_mac_busy;
 
@@ -216,18 +219,22 @@ module main(
         .flush(0),
         .ip_info(ip_info),
         .mac_busy(eth_mac_busy),
-        .ready(/* Unused */)
+        .ready(eth_ready)
     );
 
-    // When eth_ready rises, increment the LED counter
+    // When eth_ready rises or eth_mac_busy falls, increment the LED counter
+    logic eth_ready_prev;
     logic eth_mac_busy_prev;
     always_ff @(posedge clk) begin
         if (reset) begin
+            eth_ready_prev    <= 1;
             eth_mac_busy_prev <= 0;
             led               <= '0;
         end else begin
+            eth_ready_prev    <= eth_ready;
             eth_mac_busy_prev <= eth_mac_busy;
-            if (eth_mac_busy_prev && !eth_mac_busy) begin
+            if ((eth_mac_busy_prev && !eth_mac_busy) ||
+                    (!eth_ready_prev && eth_ready)) begin
                 led <= led + 1;
             end
         end
