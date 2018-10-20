@@ -465,8 +465,7 @@ module ethernet_udp_transmit #(
         READY,
         PREPARE,
         LENGTHS,
-        IP_CHECKSUM_1,
-        IP_CHECKSUM_2,
+        IP_CHECKSUM,
         SEND_PREAMBLE_SFD,
         SEND_MAC_HEADER,
         SEND_IP_HEADER,
@@ -577,10 +576,12 @@ module ethernet_udp_transmit #(
                 ip_header.total_length <=
                     IP_HEADER_BYTES + UDP_HEADER_BYTES + (payload_nibbles / 2);
                 udp_header.length <= UDP_HEADER_BYTES + (payload_nibbles / 2);
-                state             <= IP_CHECKSUM_1;
+                // Others
+                i     <= 1;
+                state <= IP_CHECKSUM;
             end
             // Compute the IP header checksum
-            IP_CHECKSUM_1: begin
+            IP_CHECKSUM: if (i == 1) begin
                 // Note that the header checksum field `ip_header[64+:16]` is
                 // not included.
                 checksum_temp <=
@@ -594,9 +595,8 @@ module ethernet_udp_transmit #(
                     ip_header[ 16+:16] + // Destination IP Upper
                     ip_header[  0+:16];  // Destination IP Lower
                 // Others
-                state <= IP_CHECKSUM_2;
-            end
-            IP_CHECKSUM_2: begin
+                i <= 0;
+            end else begin
                 ip_header.header_checksum <=
                     ~(checksum_temp[31:16] + checksum_temp[15:0]);
                 // Others
