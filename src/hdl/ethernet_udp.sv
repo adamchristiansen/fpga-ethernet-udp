@@ -317,6 +317,9 @@ module ethernet_udp_transmit #(
     localparam int unsigned UDP_HEADER_NIBBLES   = 2 * UDP_HEADER_BYTES;
     localparam int unsigned FCS_NIBBLES          = 2 * FCS_BYTES;
 
+    // The minimum number of nibbles allowed in an Ethernet frame.
+    localparam int unsigned MIN_FRAME_NIBBLES = 128;
+
     // The number of write cycles to wait after writing data to the PHY. This
     // must be at least 12 bytes worth of time.
     localparam int unsigned GAP_NIBBLES = 24;
@@ -423,13 +426,12 @@ module ethernet_udp_transmit #(
     //
     // The number of padding nibbles that are required.
     function int compute_padding_nibbles(int payload_nibbles);
-        localparam int S =
-            MAC_HEADER_NIBBLES + IP_HEADER_NIBBLES + UDP_HEADER_NIBBLES;
-
-        // The padding must make the packet length a multiple of 2 bytes,
-        // which is 4 nibbles
-        compute_padding_nibbles = 2 * ((S + payload_nibbles / 2) % 2);
-        $display("padding: %d", compute_padding_nibbles);
+        // The payload must be at least 64 bytes, so padding is added to
+        // inflate the size if necessary.
+        int nibbles = MAC_HEADER_NIBBLES + IP_HEADER_NIBBLES +
+            UDP_HEADER_NIBBLES + payload_nibbles + FCS_NIBBLES;
+        compute_padding_nibbles = nibbles < MIN_FRAME_NIBBLES ?
+            MIN_FRAME_NIBBLES - nibbles : 0;
     endfunction
 
     // FIFO read signals
