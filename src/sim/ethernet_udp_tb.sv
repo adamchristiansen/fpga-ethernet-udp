@@ -92,8 +92,7 @@ module ethernet_udp_tb();
 
         // Flush the buffer
         #500_000;
-        // Even though 3 bytes are queued, only 2 are sent because it is
-        // enforced that the payload is multiple of bytes 2 long.
+        // Send 3 bytes
         for (int i = 0; i < 6; i++) begin
             wr_data <= i % 2 ? '0 : (32 - 1 - i) / 2;
             wr_en   <= 1;

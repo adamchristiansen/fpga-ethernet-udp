@@ -290,12 +290,6 @@ module ethernet_udp_transmit #(
         if (MAX_DATA_BYTES % WORD_SIZE_BYTES != 0) begin
             $error("MAX_DATA_BYTES must be a multiple of the WORD_SIZE_BYTES");
         end
-        if (MIN_DATA_BYTES % 2 != 0) begin
-            $error("MIN_DATA_BYTES must be a multiple of 2");
-        end
-        if (MAX_DATA_BYTES % 2 != 0) begin
-            $error("MAX_DATA_BYTES must be a multiple of 2");
-        end
     end
 
     // The parameters in nibbles
@@ -317,7 +311,8 @@ module ethernet_udp_transmit #(
     localparam int unsigned UDP_HEADER_NIBBLES   = 2 * UDP_HEADER_BYTES;
     localparam int unsigned FCS_NIBBLES          = 2 * FCS_BYTES;
 
-    // The minimum number of nibbles allowed in an Ethernet frame.
+    // The minimum number of nibbles allowed in an Ethernet frame. An Ethernet
+    // must be at least 64 bytes.
     localparam int unsigned MIN_FRAME_NIBBLES = 128;
 
     // The number of write cycles to wait after writing data to the PHY. This
@@ -412,7 +407,7 @@ module ethernet_udp_transmit #(
         int temp = fifo_rd_data_count > MAX_DATA_NIBBLES ?
             MAX_DATA_NIBBLES : fifo_rd_data_count;
         compute_payload_nibbles =
-            {temp[31:2], 2'b00} - ({temp[31:2], 2'b00} % WORD_SIZE_NIBBLES);
+            {temp[31:1], 1'b0} - ({temp[31:1], 1'b0} % WORD_SIZE_NIBBLES);
     endfunction
 
     // Compute the number of padding nibbles from the number of nibbles in
@@ -643,9 +638,16 @@ module ethernet_udp_transmit #(
                 if (i > 0) begin
                     i <= i - 1;
                 end else begin
-                    fifo_rd_en <= 1;
-                    i          <= payload_nibbles - 1;
-                    state      <= SEND_PAYLOAD;
+                    // If there is no payload skip straight to sending the
+                    // padding
+                    if (payload_nibbles != 0) begin
+                        fifo_rd_en <= 1;
+                        i          <= payload_nibbles - 1;
+                        state      <= SEND_PAYLOAD;
+                    end else begin
+                        i     <= padding_nibbles - 1;
+                        state <= SEND_PADDING;
+                    end
                 end
             end
             SEND_PAYLOAD: begin
