@@ -1,10 +1,10 @@
 `timescale 1ns / 1ps
 
-// NOTE: Technical language generally uses the term _octet_ to describe a group
-// of 8-bits. This is because the term _bytes_ is not actually well defined.
+// NOTE: Technical language generally uses the term "octet" to describe a group
+// of 8 bits. This is because the term "bytes" is not actually well defined.
 // There is no reason that a byte must be 8 bits. A byte is the smallest
 // addressable unit in a system, which historically and practically has been
-// designated 8 bits. There is not reason that a byte couldn't be 16, 32, 5,
+// designated 8 bits. There is no reason that a byte couldn't be 16, 32, 5,
 // 19, or any other number of bits. However, in the implementation of this
 // module, it will be assumed that octects and bytes are equivalent and
 // interchangeable.
@@ -170,32 +170,35 @@ endinterface
 /// This module is optimal for streaming fixed width data. It offers a number
 /// guarantees.
 ///
-/// *   The packet alwaus contains an integer number of data points
+/// *   The packet alwaus contains an integer number of data points.
 /// *   The packet will always have a number of data points between a specified
-///     minimum and maximum valuem so as to not add overhead on small packets or
+///     minimum and maximum value so as to not add overhead on small packets or
 ///     produce packets too large for a network to handle.
+///     *   However, this is not true when the module is flushed, which causes
+///         all data to be sent.
 ///
-/// Data is written into a FIFO as nibbles, and the packets are constructed
-/// vased on that data. The MAC, IP, and UDP headersm and the MAC FCS are
-/// automatically generated. The data in the FIFO is read as nibbles, where
-/// one data point is equal to the number of nibbles required to make data of
-/// width WORD_SIZE_BYTES (in bytes).
+/// Data is written into a FIFO queue as nibbles, and the packets are
+/// constructed based on that data. The MAC, IP, and UDP headers and the MAC
+/// FCS are automatically generated. The data in the queue is read as nibbles,
+/// where one data point is equal to the number of nibbles required to make
+/// data of width WORD_SIZE_BYTES (in bytes).
 ///
-/// When a data point is written to the FIFO, it must be written from most
+/// When a data point is written to the queue, it must be written from most
 /// significant byte to least significant byte, with the lower nibble of each
-/// byte first. For example, suppose (in hex) 1A2B3C4D is to be written, each
-/// it should be written as the following nibbles: A1B2C3D4.
+/// byte first. For example, suppose (in hex) 1A2B3C4D is to be written, it
+/// should be written as the following nibbles: A1B2C3D4.
 ///
-/// The MAX_DATA_BYTES should not exceeed 508 based on the following
-/// reasoning.
+/// The MAX_DATA_BYTES should not exceeed 548 (though this is not enforced)
+/// based on the following reasoning.
 ///
 /// *   RFC 768: a UDP header is 8 bytes.
-/// *   RFC 791: the maximum sized internet header is 60 bytes.
+/// *   RFC 791: the maximum sized internet header is 60 bytes, though only 20
+/// *   are used by this module.
 /// *   RFC 791: every host must be able to receive a datagram of at least 576
 ///     bytes.
 ///
 /// These specifications imply that the safest maximum size of a UDP payload is
-/// 576 - 60 - 8 = 508 bytes.
+/// 576 - 20 - 8 = 548 bytes.
 ///
 /// # Notes
 ///
@@ -213,14 +216,14 @@ endinterface
 /// *   [MAX_DATA_BYTES] is the maximum number of payload bytes that will be
 ///     sent in a packet.
 /// *   [MIN_DATA_BYTES] is the minimum number of bytes that must exist in the
-///     FIFO before a packet is automatically sent. This is also the minimum
+///     queue before a packet is automatically sent. This is also the minimum
 ///     number of payload bytes that will be sent in a packet.
 /// *   [POWER_UP_CYCLES] is the number of clock cycles to wait at power up
 ///     before the PHY is ready. This must be at least 167 ms worth of time.
 ///     The default value is set appropriately for a 25 MHz [clk]. Setting
-///     this to 0 or a negative number disables the wait at powerup, but the
-///     PHY will not be initialized properly. Disabling the startup check is
-///     only really useful in simulation.
+///     this to 0 disables the wait at powerup, but the PHY will not be
+///     initialized properly. Disabling the startup sequence is only really
+///     useful in simulation.
 /// *   [WORD_SIZE_BYTES] is the number of bytes in a word of data. It is
 ///     guaranteed that the payload is multiple of this number of bytes. This
 ///     is also the size of one data point in the payload.
@@ -232,9 +235,9 @@ endinterface
 /// *   [wr_en] indicates that the data on [wr_data] is valid and should be
 ///     written. While this is asserted high data on [wr_data] is read in.
 /// *   [wr_data] is the input data bus for the payload data.
-/// *   [wr_rst_busy] indicates that the FIFO is in a reset state when asserted
+/// *   [wr_rst_busy] indicates that the queue is in a reset state when asserted
 ///     high.
-/// *   [wr_full] means that the input FIFO is full when asserted high and no
+/// *   [wr_full] means that the input queue is full when asserted high and no
 ///     data can be written until more packets are sent out.
 /// *   [clk25] is a 25 MHz clock signal used to write to the PHY.
 /// *   [eth] contains the signals used to write to the Ethernet PHY.
@@ -243,16 +246,16 @@ endinterface
 ///     this may not send all data.
 /// *   [ip_info] is the source and destination data that is needed to transmit
 /// *   [mac_busy] indicates that packet is currently being sent. Note that the
-///     FIFO can still be written to when this is asserted. When this signal
+///     queue can still be written to when this is asserted. When this signal
 ///     falls a packet has finished sending.
 /// *   [ready] indicates that the module is powered up and ready to
 ///     communicate with the PHY when asserted high.
 module ethernet_udp_transmit #(
-    parameter int CLK_RATIO = 0,
-    parameter int MAX_DATA_BYTES = 508,
-    parameter int MIN_DATA_BYTES = 256,
-    parameter int POWER_UP_CYCLES = 5_000_000,
-    parameter int WORD_SIZE_BYTES = 0) (
+    parameter int unsigned CLK_RATIO = 0,
+    parameter int unsigned MAX_DATA_BYTES = 548,
+    parameter int unsigned MIN_DATA_BYTES = 256,
+    parameter int unsigned POWER_UP_CYCLES = 5_000_000,
+    parameter int unsigned WORD_SIZE_BYTES = 0) (
     // Standard
     input logic clk,
     input logic reset,
@@ -394,18 +397,18 @@ module ethernet_udp_transmit #(
     endfunction
 
     // Compute the number of payload nibbles from the number of nibbles in
-    // the fifo.
+    // the queue.
     //
     // # Arguments
     //
-    // * [fifo_nibbles] is the number of nibbles in the fifo.
+    // * [fifo_nibbles] is the number of nibbles in the queue.
     //
     // # Returns
     //
     // The number of payload nibbles.
-    function int compute_payload_nibbles(int fifo_size);
-        int temp = fifo_rd_data_count > MAX_DATA_NIBBLES ?
-            MAX_DATA_NIBBLES : fifo_rd_data_count;
+    function int compute_payload_nibbles(int fifo_nibbles);
+        automatic int temp = fifo_nibbles > MAX_DATA_NIBBLES ?
+            MAX_DATA_NIBBLES : fifo_nibbles;
         compute_payload_nibbles =
             {temp[31:1], 1'b0} - ({temp[31:1], 1'b0} % WORD_SIZE_NIBBLES);
     endfunction
@@ -423,7 +426,7 @@ module ethernet_udp_transmit #(
     function int compute_padding_nibbles(int payload_nibbles);
         // The payload must be at least 64 bytes, so padding is added to
         // inflate the size if necessary.
-        int nibbles = MAC_HEADER_NIBBLES + IP_HEADER_NIBBLES +
+        automatic int nibbles = MAC_HEADER_NIBBLES + IP_HEADER_NIBBLES +
             UDP_HEADER_NIBBLES + payload_nibbles + FCS_NIBBLES;
         compute_padding_nibbles = nibbles < MIN_FRAME_NIBBLES ?
             MIN_FRAME_NIBBLES - nibbles : 0;
