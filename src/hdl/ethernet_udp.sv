@@ -233,7 +233,8 @@ endinterface
 /// *   [clk] is the system clock.
 /// *   [reset] is the system reset signal.
 /// *   [wr_en] indicates that the data on [wr_data] is valid and should be
-///     written. While this is asserted high data on [wr_data] is read in.
+///     written. While this is asserted high data on [wr_data] is read in on
+///     the rising edge of [clk].
 /// *   [wr_data] is the input data bus for the payload data.
 /// *   [wr_rst_busy] indicates that the queue is in a reset state when asserted
 ///     high.
@@ -243,8 +244,10 @@ endinterface
 /// *   [eth] contains the signals used to write to the Ethernet PHY.
 /// *   [flush] causes any data in the queue to be sent even if it is less than
 ///     [MIN_DATA_BYTES] long. This will only send a multiple of two bytes so
-///     this may not send all data.
-/// *   [ip_info] is the source and destination data that is needed to transmit
+///     this may not send all data. It is read on the falling edge of
+///     [eth.tx_clk].
+/// *   [ip_info] is the source and destination data that is needed to
+///     transmit. It is read on the falling edge of [eth.tx_clk].
 /// *   [mac_busy] indicates that packet is currently being sent. Note that the
 ///     queue can still be written to when this is asserted. When this signal
 ///     falls a packet has finished sending.
