@@ -40,6 +40,10 @@ To use this module in a project, there are two files that must be included
 The `ethernet_udp_transmit` module is to be instantiated, and it internally
 uses the `fifo_async_4` IP.
 
+If the Xilinx IP is locked, then it is likely that the IP was configured for
+a different part. Check this by running `report_ip_status` in the Tcl console,
+and the fix is to run `upgrade_ip [get_ips *]`.
+
 ## Building the HDL
 
 Open Xilinx Vivado and select `Tools > Run Tcl Script...`, then select the
