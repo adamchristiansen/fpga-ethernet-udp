@@ -17,7 +17,7 @@
 set project_name "fpga_ethernet_udp"
 
 # The part number of the hardware.
-set part_number "xc7a35ticsg324-1L"
+set part_number "xc7a100tcsg324-1"
 
 # The language to use in simulation. This can be VHDL, Verilog, or Mixed.
 set simulator_language "Mixed"
