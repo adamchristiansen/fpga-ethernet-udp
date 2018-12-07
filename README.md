@@ -35,10 +35,10 @@ You **should not** use this module if
 To use this module in a project, there are two files that must be included
 
 *   `src/hdl/eth_udp.sv`
-*   `src/ip/fifo_async_4/fifo_async_4.xci`
+*   `src/ip/eth_udp_fifo_async/eth_udp_fifo_async.xci`
 
 The `ethernet_udp_transmit` module is to be instantiated, and it internally
-uses the `fifo_async_4` IP.
+uses the `eth_udp_fifo_async` IP.
 
 If the Xilinx IP is locked, then it is likely that the IP was configured for
 a different part. Check this by running `report_ip_status` in the Tcl console,

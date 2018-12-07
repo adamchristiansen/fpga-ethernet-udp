@@ -443,7 +443,7 @@ module eth_udp_send #(
 
     // The FIFO that allows data to cross clock domains to write data to the
     // PHY on a different clock.
-    fifo_async_4 fifo_async_4(
+    eth_udp_fifo_async fifo(
         .rst(rst),
         // Write
         .din(wr_d),
