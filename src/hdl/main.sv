@@ -177,7 +177,7 @@ module main(
     end
 
     // Instantiate an interface with the Ethernet PHY control signals
-    EthernetPHY eth();
+    IEthPhy eth();
     assign eth_ref_clk = eth.ref_clk; // Out
     assign eth_rstn    = eth.rstn;    // Out
     assign eth.tx_clk  = eth_tx_clk;  // In
@@ -185,7 +185,7 @@ module main(
     assign eth_tx_d    = eth.tx_d;    // Out
 
     // The information needed to describe the source and the destination
-    IPInfo ip_info();
+    IIpInfo ip_info();
     assign ip_info.src_ip   = params.src_ip;
     assign ip_info.src_mac  = params.src_mac;
     assign ip_info.src_port = params.src_port;
