@@ -1,6 +1,6 @@
 `timescale 1ns / 1ps
 
-module ethernet_udp_tb();
+module eth_udp_send_tb();
 
     // Create a 100 MHz clock
     logic clk = 0;
@@ -11,10 +11,10 @@ module ethernet_udp_tb();
     always clk25 = #20 ~clk25;
 
     // The reset signal
-    logic reset = 0;
+    logic rst = 0;
 
     // Indicates that the Ethernet module is powered on and ready
-    logic ready;
+    logic rdy;
 
     // Flushes the buffer
     logic flush = 0;
@@ -36,30 +36,30 @@ module ethernet_udp_tb();
 
     // The IP info
     IPInfo ip_info();
-    assign ip_info.src_ip    = 32'h55_66_77_88;
-    assign ip_info.src_mac   = 48'haa_bb_cc_dd_ee_ff;
-    assign ip_info.src_port  = 16'h1000;
-    assign ip_info.dest_ip   = 32'h11_22_33_44;
-    assign ip_info.dest_mac  = 48'h1a_2b_3c_4d_5e_6f;
-    assign ip_info.dest_port = 16'h1000;
+    assign ip_info.src_ip   = 32'h55_66_77_88;
+    assign ip_info.src_mac  = 48'haa_bb_cc_dd_ee_ff;
+    assign ip_info.src_port = 16'h1000;
+    assign ip_info.dst_ip   = 32'h11_22_33_44;
+    assign ip_info.dst_mac  = 48'h1a_2b_3c_4d_5e_6f;
+    assign ip_info.dst_port = 16'h1000;
 
     // The signals to write data to the module
     logic wr_en = 0;
-    logic [3:0] wr_data = '0;
+    logic [3:0] wr_d = '0;
 
-    ethernet_udp_transmit #(
+    eth_udp_send #(
         .CLK_RATIO(4),
         .MAX_DATA_BYTES(480),
         .MIN_DATA_BYTES(16),
         .POWER_UP_CYCLES(100),
         .WORD_SIZE_BYTES(1))
-    ethernet_udp_transmit(
+    eth_udp_send(
         // Standard
         .clk(clk),
-        .reset(reset),
+        .rst(rst),
         // Writing data
         .wr_en(wr_en),
-        .wr_data(wr_data),
+        .wr_d(wr_d),
         .wr_rst_busy(/* Unused */),
         .wr_full(/* Unused */),
         // Ethernet
@@ -67,40 +67,40 @@ module ethernet_udp_tb();
         .eth(eth),
         .flush(flush),
         .ip_info(ip_info),
-        .ready(ready)
+        .rdy(rdy)
     );
 
     // Run the test
     initial begin
         // Reset the module
-        reset <= 1;
+        rst <= 1;
 
         // Wait a while before deasserting the reset
         #100;
-        reset <= 0;
+        rst <= 0;
 
         // Send the data
         #5000;
         for (int i = 0; i < 32; i++) begin
-            wr_data <= i % 2 ? '0 : (32 - 1 - i) / 2;
-            wr_en   <= 1;
+            wr_d  <= i % 2 ? '0 : (32 - 1 - i) / 2;
+            wr_en <= 1;
             // Wait for one clock cycle
             #10;
         end
-        wr_data <= '0;
-        wr_en   <= 0;
+        wr_d  <= '0;
+        wr_en <= 0;
 
         // Flush the buffer
         #500_000;
         // Send 3 bytes
         for (int i = 0; i < 6; i++) begin
-            wr_data <= i % 2 ? '0 : (32 - 1 - i) / 2;
-            wr_en   <= 1;
+            wr_d  <= i % 2 ? '0 : (32 - 1 - i) / 2;
+            wr_en <= 1;
             // Wait for one clock cycle
             #10;
         end
-        wr_data <= '0;
-        wr_en   <= 0;
+        wr_d  <= '0;
+        wr_en <= 0;
         #200;
         flush <= 1;
         #200;

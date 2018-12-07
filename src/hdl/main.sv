@@ -6,7 +6,7 @@
 /// # Ports
 ///
 /// *   [clk] is the 100MHz off-chip clock.
-/// *   [reset] is the active high system reset signal.
+/// *   [rst] is the active high system reset signal.
 /// *   [eth_rstn] is an active low reset. This signal must be asserted for at
 ///     least 1 µs for a reset event to get triggered.
 /// *   [eth_tx_clk] is the clock to transmit data on. This will have two
@@ -21,7 +21,7 @@
 module main(
     // System
     input logic clk_ref,
-    input logic reset,
+    input logic rst,
     // Ethernet
     output logic eth_ref_clk,
     output logic eth_rstn,
@@ -43,7 +43,7 @@ module main(
 
     clk_gen clk_gen(
         .clk_ref(clk_ref),
-        .reset(reset),
+        .reset(rst),
         .clk100(clk),
         .clk25(clk25),
         .locked(/* Unused */)
@@ -57,66 +57,66 @@ module main(
     localparam int DIVIDER = 868;
 
     // The data received and sent on the UART.
-    logic [7:0] uart_data;
+    logic [7:0] uart_d;
 
     // Indicates that a byte was received on the UART.
-    logic uart_receive_ready;
+    logic uart_recv_rdy;
 
     // This is a structure of parameters that descibes what to send.
     struct packed {
         logic [31:0] src_ip;
         logic [15:0] src_port;
         logic [47:0] src_mac;
-        logic [31:0] dest_ip;
-        logic [15:0] dest_port;
-        logic [47:0] dest_mac;
+        logic [31:0] dst_ip;
+        logic [15:0] dst_port;
+        logic [47:0] dst_mac;
         logic [7:0] seed;
-        logic [7:0] generator;
+        logic [7:0] gen;
     } params;
 
     // Indicates that the parameters have been received and are ready.
-    logic params_ready;
+    logic params_rdy;
 
     // The number of bytes in the parameters.
     localparam int unsigned PARAM_BYTES = 26;
 
     // The index into the parameters for assigning bytes read on the UART.
-    int unsigned param_index;
+    int unsigned params_i;
 
-    uart_receive #(.DIVIDER(DIVIDER)) uart_receive(
+    uart_recv #(.DIVIDER(DIVIDER)) uart_recv(
         .clk(clk),
-        .reset(reset),
+        .rst(rst),
         .rx(uart_rx),
-        .data(uart_data),
-        .ready(uart_receive_ready)
+        .d(uart_d),
+        .rdy(uart_recv_rdy)
     );
 
     // Prepare the parameters for use in the UDP packet.
     always_ff @(posedge clk) begin
-        if (reset) begin
-            param_index <= PARAM_BYTES - 1;
-            params      <= '0;
-            params_ready <= 0;
-        end else if (uart_receive_ready) begin
-            params[8*param_index+:8] <= uart_data;
-            if (param_index == 0) begin
-                param_index  <= PARAM_BYTES - 1;
-                params_ready <= 1;
+        if (rst) begin
+            params_i    <= PARAM_BYTES - 1;
+            params     <= '0;
+            params_rdy <= 0;
+        end else if (uart_recv_rdy) begin
+            params[8*params_i+:8] <= uart_d;
+            if (params_i == 0) begin
+                params_i   <= PARAM_BYTES - 1;
+                params_rdy <= 1;
             end else begin
-                param_index  <= param_index - 1;
-                params_ready <= 0;
+                params_i   <= params_i - 1;
+                params_rdy <= 0;
             end
         end else begin
-            params_ready <= 0;
+            params_rdy <= 0;
         end
     end
 
-    uart_transmit #(.DIVIDER(DIVIDER)) uart_transmit(
+    uart_send #(.DIVIDER(DIVIDER)) uart_send(
         .clk(clk),
-        .reset(reset),
-        .data(uart_data),
-        .send(uart_receive_ready),
-        .ready(/* Not connected */),
+        .rst(rst),
+        .d(uart_d),
+        .send(uart_recv_rdy),
+        .rdy(/* Not connected */),
         .tx(uart_tx)
     );
 
@@ -128,7 +128,7 @@ module main(
     localparam int unsigned DATA_BYTES = 256;
 
     // The data to be sent in a UDP packet.
-    logic unsigned [8*DATA_BYTES-1:0] eth_data;
+    logic unsigned [8*DATA_BYTES-1:0] eth_d;
 
     // Starts writing data to the Ethernet module
     logic send_eth;
@@ -136,13 +136,13 @@ module main(
     // When there is new data from the UART, prepare the data to be sent over
     // Ethernet.
     always_ff @(posedge clk) begin
-        if (reset) begin
-            eth_data <= '0;
+        if (rst) begin
+            eth_d    <= '0;
             send_eth <= 0;
-        end else if (params_ready) begin
+        end else if (params_rdy) begin
             for (int unsigned i = 0; i < DATA_BYTES; i++) begin
-                eth_data[8*i+:8] <=
-                    params.seed + (params.generator * (DATA_BYTES - 1 - i));
+                eth_d[8*i+:8] <=
+                    params.seed + (params.gen * (DATA_BYTES - 1 - i));
             end
             send_eth <= 1;
         end else begin
@@ -151,7 +151,7 @@ module main(
     end
 
     // The signals for writing to the MAC
-    logic [3:0] wr_data;
+    logic [3:0] wr_d;
     logic wr_en;
 
     // The index in the data that is being written to the MAC
@@ -159,14 +159,14 @@ module main(
 
     // Write the data to the MAC
     always_ff @(posedge clk) begin
-        if (reset) begin
-            wr_data <= '0;
-            wr_en   <= 0;
-            wr_i    <= -1;
+        if (rst) begin
+            wr_d  <= '0;
+            wr_en <= 0;
+            wr_i  <= -1;
         end else if (wr_i >= 0) begin
-            wr_data <= eth_data[8 * (wr_i >> 1) + 4 * ((~wr_i) & 1)+:4];
-            wr_en   <= 1;
-            wr_i    <= wr_i - 1;
+            wr_d  <= eth_d[8 * (wr_i >> 1) + 4 * ((~wr_i) & 1)+:4];
+            wr_en <= 1;
+            wr_i  <= wr_i - 1;
         end else if (send_eth) begin
             wr_en <= 0;
             wr_i  <= 2 * DATA_BYTES - 1;
@@ -186,31 +186,31 @@ module main(
 
     // The information needed to describe the source and the destination
     IPInfo ip_info();
-    assign ip_info.src_ip    = params.src_ip;
-    assign ip_info.src_mac   = params.src_mac;
-    assign ip_info.src_port  = params.src_port;
-    assign ip_info.dest_ip   = params.dest_ip;
-    assign ip_info.dest_mac  = params.dest_mac;
-    assign ip_info.dest_port = params.dest_port;
+    assign ip_info.src_ip   = params.src_ip;
+    assign ip_info.src_mac  = params.src_mac;
+    assign ip_info.src_port = params.src_port;
+    assign ip_info.dst_ip   = params.dst_ip;
+    assign ip_info.dst_mac  = params.dst_mac;
+    assign ip_info.dst_port = params.dst_port;
 
     // Indicates that the module has finished the startup sequence
-    logic eth_ready;
+    logic eth_rdy;
 
     // Indicates the Ethernet module is busy writing to the PHY
     logic eth_mac_busy;
 
-    ethernet_udp_transmit #(
+    eth_udp_send #(
         .CLK_RATIO(4),
         .MIN_DATA_BYTES(DATA_BYTES),
         .POWER_UP_CYCLES(5_000_000),
         .WORD_SIZE_BYTES(1))
-    ethernet_udp_transmit(
+    eth_udp_send(
         // Standard
         .clk(clk),
-        .reset(reset),
+        .rst(rst),
         // Writing data
         .wr_en(wr_en),
-        .wr_data(wr_data),
+        .wr_d(wr_d),
         .wr_rst_busy(/* Unused */),
         .wr_full(/* Unused */),
         // Ethernet
@@ -219,22 +219,22 @@ module main(
         .flush(0),
         .ip_info(ip_info),
         .mac_busy(eth_mac_busy),
-        .ready(eth_ready)
+        .rdy(eth_rdy)
     );
 
-    // When eth_ready rises or eth_mac_busy falls, increment the LED counter
-    logic eth_ready_prev;
+    // When eth_rdy rises or eth_mac_busy falls, increment the LED counter
+    logic eth_rdy_prev;
     logic eth_mac_busy_prev;
     always_ff @(posedge clk) begin
-        if (reset) begin
-            eth_ready_prev    <= 1;
+        if (rst) begin
+            eth_rdy_prev      <= 1;
             eth_mac_busy_prev <= 0;
             led               <= '0;
         end else begin
-            eth_ready_prev    <= eth_ready;
+            eth_rdy_prev      <= eth_rdy;
             eth_mac_busy_prev <= eth_mac_busy;
             if ((eth_mac_busy_prev && !eth_mac_busy) ||
-                    (!eth_ready_prev && eth_ready)) begin
+                    (!eth_rdy_prev && eth_rdy)) begin
                 led <= led + 1;
             end
         end
