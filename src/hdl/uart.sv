@@ -9,21 +9,21 @@
 /// # Ports
 ///
 /// *   [clk] is the system clock and the reference clock for the division.
-/// *   [reset] is the system reset.
-/// *   [data] is the byte to transmit. This is latched and sent when [ready]
-///     is high and [send] rises.
-/// *   [send] is rising edge active to latch and send the [data].
-/// *   [ready] indicates that the module is ready to receive a [send] signal
-///     to latch and and send the [data]. This is held until the next [send]
+/// *   [rst] is the system reset.
+/// *   [d] is the byte to transmit. This is latched and sent when [rdy] is
+///     high and [send] rises.
+/// *   [send] is rising edge active to latch and send the [d].
+/// *   [rdy] indicates that the module is ready to receive a [send] signal
+///     to latch and and send the [d]. This is held until the next [send]
 ///     signal.
 /// *   [tx] is the serial line to transmit over.
-module uart_transmit #(
+module uart_send #(
     parameter int unsigned DIVIDER = 0) (
     input logic clk,
-    input logic reset,
-    input logic [7:0] data,
+    input logic rst,
+    input logic [7:0] d,
     input logic send,
-    output logic ready,
+    output logic rdy,
     output logic tx);
 
     // Assert that the parameters are appropriate
@@ -33,12 +33,12 @@ module uart_transmit #(
         end
     end
 
-    logic clear;
+    logic clr;
     logic baud_clk;
-    baud_clk_generator #(.DIVIDER(DIVIDER)) baud_clk_generator(
+    baud_clk_gen #(.DIVIDER(DIVIDER)) baud_clk_gen(
         .clk(clk),
-        .reset(reset),
-        .clear(clear),
+        .rst(rst),
+        .clr(clr),
         .baud_clk_tx(baud_clk),
         .baud_clk_rx(/* Not connected */)
     );
@@ -46,35 +46,10 @@ module uart_transmit #(
     // The 10-bit frame to be sent
     logic [9:0] frame;
 
-    // The state machine for sending the bits.
-    enum {
-        WAITING,
-        SEND_0,
-        SEND_1,
-        SEND_2,
-        SEND_3,
-        SEND_4,
-        SEND_5,
-        SEND_6,
-        SEND_7,
-        SEND_8,
-        SEND_9
-    } state;
-
-    // Sends the [curr_data] from the [curr_state] and transitions into
-    // [next_state]. Additionally, this updates the `ready` to the value of
-    // [next_ready].
-    `define ADVANCE_STATE(curr_state, curr_data, next_state, next_ready=0) \
-        curr_state: if (baud_clk) begin                                    \
-            ready <= next_ready;                                           \
-            state <= next_state;                                           \
-            tx    <= curr_data;                                            \
-        end
-
     // Track the previous value of send for edge detection
     logic send_prev;
     always_ff @(posedge clk) begin
-        if (reset) begin
+        if (rst) begin
             // This starts high on a reset to prevent accidentally detecting an
             // edge as soon as the reset is deasserted if the input is high.
             send_prev <= 1;
@@ -83,44 +58,58 @@ module uart_transmit #(
         end
     end
 
+    /// The combined index and state tracker for transmitting a byte.
+    int i;
+
+    /// The sentinel values that `i` can take that indicate when a byte should
+    /// start being sent, when the byte has finished sending, and when the the
+    /// system is waiting to latch the next byte.
+    localparam int START_I = 0;
+    localparam int DONE_I  = 10;
+    localparam int WAIT_I  = 11;
+
+    /// The counter for how many [clk] cycles to wait on the stop bit before
+    /// moving to the wait state.
+    int w;
+
+    /// The number of [clk] cycles to wait on the stop bit before latching the
+    /// next values to send.
+    localparam int WAIT_COUNT = (3 * DIVIDER) / 4;
+
     always_ff @(posedge clk) begin
-        if (reset) begin
-            clear <= 1;
-            ready <= 1;
-            state <= WAITING;
-            tx    <= 1;
-        end else begin
-            case (state)
-                WAITING: begin
-                    tx    <= 1;
-                    if (!send_prev && send) begin
-                        clear <= 0;
-                        frame <= {1'b1, data, 1'b0};
-                        ready <= 0;
-                        state <= SEND_0;
-                    end else begin
-                        clear <= 1;
-                    end
-                end
-                `ADVANCE_STATE(SEND_0, frame[0], SEND_1)
-                `ADVANCE_STATE(SEND_1, frame[1], SEND_2)
-                `ADVANCE_STATE(SEND_2, frame[2], SEND_3)
-                `ADVANCE_STATE(SEND_3, frame[3], SEND_4)
-                `ADVANCE_STATE(SEND_4, frame[4], SEND_5)
-                `ADVANCE_STATE(SEND_5, frame[5], SEND_6)
-                `ADVANCE_STATE(SEND_6, frame[6], SEND_7)
-                `ADVANCE_STATE(SEND_7, frame[7], SEND_8)
-                `ADVANCE_STATE(SEND_8, frame[8], SEND_9)
-                `ADVANCE_STATE(SEND_9, frame[9], WAITING, 1)
-            endcase
+        if (rst) begin
+            clr <= 1;
+            i   <= WAIT_I;
+            rdy <= 1;
+            tx  <= 1;
+            w   <= WAIT_COUNT;
+        // Waiting to latch the input to send
+        end else if (i == WAIT_I) begin
+            tx <= 1;
+            if (!send_prev && send) begin
+                clr   <= 0;
+                i     <= START_I;
+                frame <= {1'b1, d, 1'b0};
+                rdy   <= 0;
+                w     <= WAIT_COUNT;
+            end
+        // After sending a byte, wait a bit before sending the next one so
+        // that there is enough time for the stop bit to be seen.
+        end else if (i == DONE_I) begin
+            clr <= 1;
+            i   <= w <= 0 ? WAIT_I : i;
+            rdy <= w <= 0 ? 1      : 0;
+            w   <= w - 1;
+        // Send out the bits on the baud clock
+        end else if (baud_clk) begin
+            tx <= frame[i];
+            i  <= i + 1;
         end
     end
 
-    `undef ADVANCE_STATE
-
 endmodule
 
-/// The transmit part of a UART that can send data over serial.
+/// The receive part of a UART that can read data over serial.
 ///
 /// # Parameters
 ///
@@ -131,18 +120,18 @@ endmodule
 /// *   [clk] is the system clock and the reference clock for the division.
 /// *   [reset] is the system reset.
 /// *   [rx] is the serial line to read.
-/// *   [data] is the byte that was received. This is updated when [ready]
-///     rises and it valid until [ready] is driven low.
-/// *   [ready] indicates that the module has received a byte and exposed it on
-///     the [data] port. When [ready] rises the data is ready. This is held
-///     high for 1 clock cycle.
-module uart_receive #(
+/// *   [d] is the byte that was received. This is updated when [rdy] rises and
+///     it valid until [rdy] is driven low.
+/// *   [rdy] indicates that the module has received a byte and exposed it on
+///     the [d] port. When [rdy] rises the data is ready. This is held high for
+///     1 clock cycle.
+module uart_recv #(
     parameter int unsigned DIVIDER = 0) (
     input logic clk,
-    input logic reset,
+    input logic rst,
     input logic rx,
-    output logic [7:0] data,
-    output logic ready);
+    output logic [7:0] d,
+    output logic rdy);
 
     // Assert that the parameters are appropriate
     initial begin
@@ -152,17 +141,17 @@ module uart_receive #(
     end
 
     logic baud_clk;
-    logic clear;
-    baud_clk_generator #(.DIVIDER(DIVIDER)) baud_clk_generator(
+    logic clr;
+    baud_clk_gen #(.DIVIDER(DIVIDER)) baud_clk_gen(
         .clk(clk),
-        .reset(reset),
-        .clear(clear),
+        .rst(rst),
+        .clr(clr),
         .baud_clk_tx(/* Not connected */),
         .baud_clk_rx(baud_clk)
     );
 
     // A temporary variable for storing the byte to be received.
-    logic [7:0] received_byte;
+    logic [7:0] recv_byte;
 
     // The state machine for reading the bits.
     enum {
@@ -179,51 +168,51 @@ module uart_receive #(
         READ_9
     } state;
 
-    // From the [curr_state], read into the [curr_data] bit and transition into
+    // From the [curr_state], read into the [curr_d] bit and transition into
     // [next_state].
-    `define ADVANCE_STATE(curr_state, curr_data, next_state) \
-        curr_state: if (baud_clk) begin                      \
-            curr_data <= rx;                                 \
-            state     <= next_state;                         \
+    `define ADVANCE_STATE(curr_state, curr_d, next_state) \
+        curr_state: if (baud_clk) begin                   \
+            curr_d <= rx;                                 \
+            state  <= next_state;                         \
         end
 
     always_ff @(posedge clk) begin
-        if (reset) begin
-            clear <= 0;
-            data  <= '0;
-            ready <= 0;
+        if (rst) begin
+            clr   <= 0;
+            d     <= '0;
+            rdy   <= 0;
             state <= WAITING;
         end else begin
             case (state)
                 WAITING: begin
-                    ready <= 0;
-                    clear <= 1;
+                    rdy <= 0;
+                    clr <= 1;
                     if (~rx) begin
                         state <= READ_0;
                     end
                 end
                 READ_0: begin
-                    clear <= 0;
+                    clr <= 0;
                     if (baud_clk) begin
                         // Nothing needs to be read because here it is
                         // guaranteed that the [rx] value is 0.
                         state <= READ_1;
                     end
                 end
-                `ADVANCE_STATE(READ_1, received_byte[0], READ_2)
-                `ADVANCE_STATE(READ_2, received_byte[1], READ_3)
-                `ADVANCE_STATE(READ_3, received_byte[2], READ_4)
-                `ADVANCE_STATE(READ_4, received_byte[3], READ_5)
-                `ADVANCE_STATE(READ_5, received_byte[4], READ_6)
-                `ADVANCE_STATE(READ_6, received_byte[5], READ_7)
-                `ADVANCE_STATE(READ_7, received_byte[6], READ_8)
-                `ADVANCE_STATE(READ_8, received_byte[7], READ_9)
+                `ADVANCE_STATE(READ_1, recv_byte[0], READ_2)
+                `ADVANCE_STATE(READ_2, recv_byte[1], READ_3)
+                `ADVANCE_STATE(READ_3, recv_byte[2], READ_4)
+                `ADVANCE_STATE(READ_4, recv_byte[3], READ_5)
+                `ADVANCE_STATE(READ_5, recv_byte[4], READ_6)
+                `ADVANCE_STATE(READ_6, recv_byte[5], READ_7)
+                `ADVANCE_STATE(READ_7, recv_byte[6], READ_8)
+                `ADVANCE_STATE(READ_8, recv_byte[7], READ_9)
                 READ_9: if (baud_clk) begin
                     if (rx) begin
                         // The byte is only exposed at the output if the [rx]
                         // is high at the end.
-                        data  <= received_byte;
-                        ready <= 1;
+                        d   <= recv_byte;
+                        rdy <= 1;
                     end
                     state <= WAITING;
                 end
@@ -278,17 +267,17 @@ endmodule
 /// # Ports
 ///
 /// *   [clk] is the system clock and the reference clock for the division.
-/// *   [reset] is the system reset.
-/// *   [clear] is a synchronous clear signal that resets the output clocks
+/// *   [rst] is the system reset.
+/// *   [clr] is a synchronous clear signal that resets the output clocks
 ///     while it is asserted. The clocks will begin counting when this is
 ///     deasserted.
 /// *   [baud_clk_tx] is the clock that is generated for transmitting.
 /// *   [baud_clk_rx] is the clock that is generated for receiving.
-module baud_clk_generator #(
+module baud_clk_gen #(
     parameter int unsigned DIVIDER = 0) (
     input logic clk,
-    input logic reset,
-    input logic clear,
+    input logic rst,
+    input logic clr,
     output logic baud_clk_tx,
     output logic baud_clk_rx);
 
@@ -315,7 +304,7 @@ module baud_clk_generator #(
 
     // Update the generated clock.
     always_ff @(posedge clk) begin
-        if (reset || clear || counter >= COUNTER_MAX) begin
+        if (rst || clr || counter >= COUNTER_MAX) begin
             baud_clk_tx <= 0;
             baud_clk_rx <= 0;
             counter     <= '0;

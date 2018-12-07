@@ -19,11 +19,11 @@
 ///
 /// # Fields
 ///
-/// *   [dest_mac] is the destination MAC address.
+/// *   [dst_mac] is the destination MAC address.
 /// *   [src_mac] is the source MAC address.
 /// *   [ether_type] indicates the protocol of the packet being sent.
 typedef struct packed {
-    logic [47:0] dest_mac;
+    logic [47:0] dst_mac;
     logic [47:0] src_mac;
     logic [15:0] ether_type;
 } MACHeader;
@@ -59,8 +59,8 @@ typedef struct packed {
 /// *   [protocol] the next level protocol to use.
 /// *   [header_checksum] is the checksum that verifies the validity of the
 ///     IP header.
-/// *   [source_ip] is the source IPv4 address.
-/// *   [dest_ip] is the destination IPv4 address.
+/// *   [src_ip] is the source IPv4 address.
+/// *   [dst_ip] is the destination IPv4 address.
 typedef struct packed {
     logic [3:0] version;
     logic [3:0] ihl;
@@ -73,7 +73,7 @@ typedef struct packed {
     logic [7:0] protocol;
     logic [15:0] header_checksum;
     logic [31:0] src_ip;
-    logic [31:0] dest_ip;
+    logic [31:0] dst_ip;
 } IPHeader;
 
 /// According to RFC 768, the UDP header has the following format
@@ -88,12 +88,12 @@ typedef struct packed {
 /// # Fields
 ///
 /// *   [src_port] is the number of the source port.
-/// *   [dest_port] is the number of the destination port.
+/// *   [dst_port] is the number of the destination port.
 /// *   [length] is the length of the packet in bytes inclufing this header.
 /// *   [checksum] is the UDP checksum.
 typedef struct packed {
     logic [15:0] src_port;
-    logic [15:0] dest_port;
+    logic [15:0] dst_port;
     logic [15:0] length;
     logic [15:0] checksum;
 } UDPHeader;
@@ -106,9 +106,9 @@ typedef struct packed {
 /// *   [src_ip] is the source IP address.
 /// *   [src_mac] is the source MAC address.
 /// *   [src_port] is the source port number.
-/// *   [dest_ip] is the destination IP address.
-/// *   [dest_mac] is the destination MAC address.
-/// *   [dest_port] is the destination port number.
+/// *   [dst_ip] is the destination IP address.
+/// *   [dst_mac] is the destination MAC address.
+/// *   [dst_port] is the destination port number.
 ///
 /// # Mod Ports
 ///
@@ -117,17 +117,17 @@ interface IPInfo;
     logic [31:0] src_ip;
     logic [47:0] src_mac;
     logic [15:0] src_port;
-    logic [31:0] dest_ip;
-    logic [47:0] dest_mac;
-    logic [15:0] dest_port;
+    logic [31:0] dst_ip;
+    logic [47:0] dst_mac;
+    logic [15:0] dst_port;
 
     modport in(
         input src_ip,
         input src_mac,
         input src_port,
-        input dest_ip,
-        input dest_mac,
-        input dest_port);
+        input dst_ip,
+        input dst_mac,
+        input dst_port);
 endinterface
 
 /// Holds the signals that control the Ethernet PHY.
@@ -231,11 +231,11 @@ endinterface
 /// # Ports
 ///
 /// *   [clk] is the system clock.
-/// *   [reset] is the system reset signal.
-/// *   [wr_en] indicates that the data on [wr_data] is valid and should be
-///     written. While this is asserted high data on [wr_data] is read in on
-///     the rising edge of [clk].
-/// *   [wr_data] is the input data bus for the payload data.
+/// *   [rst] is the system reset signal.
+/// *   [wr_en] indicates that the data on [wr_d] is valid and should be
+///     written. While this is asserted high data on [wr_d] is read in on the
+///     rising edge of [clk].
+/// *   [wr_d] is the input data bus for the payload data.
 /// *   [wr_rst_busy] indicates that the queue is in a reset state when asserted
 ///     high.
 /// *   [wr_full] means that the input queue is full when asserted high and no
@@ -253,7 +253,7 @@ endinterface
 ///     falls a packet has finished sending.
 /// *   [ready] indicates that the module is powered up and ready to
 ///     communicate with the PHY when asserted high.
-module ethernet_udp_transmit #(
+module eth_udp_send #(
     parameter int unsigned CLK_RATIO = 0,
     parameter int unsigned MAX_DATA_BYTES = 548,
     parameter int unsigned MIN_DATA_BYTES = 256,
@@ -261,10 +261,10 @@ module ethernet_udp_transmit #(
     parameter int unsigned WORD_SIZE_BYTES = 0) (
     // Standard
     input logic clk,
-    input logic reset,
+    input logic rst,
     // Writing data
     input logic wr_en,
-    input logic [3:0] wr_data,
+    input logic [3:0] wr_d,
     output logic wr_rst_busy,
     output logic wr_full,
     // Ethernet
@@ -273,7 +273,7 @@ module ethernet_udp_transmit #(
     input logic flush,
     IPInfo.in ip_info,
     output logic mac_busy,
-    output logic ready);
+    output logic rdy);
 
     // Assert that the parameters are appropriate
     initial begin
@@ -444,9 +444,9 @@ module ethernet_udp_transmit #(
     // The FIFO that allows data to cross clock domains to write data to the
     // PHY on a different clock.
     fifo_async_4 fifo_async_4(
-        .rst(reset),
+        .rst(rst),
         // Write
-        .din(wr_data),
+        .din(wr_d),
         .full(wr_full),
         .wr_clk(clk),
         .wr_en(wr_en),
@@ -509,7 +509,7 @@ module ethernet_udp_transmit #(
     // Run the state machine that sends that data to the PHY against the
     // transmit clock.
     always_ff @(negedge eth.tx_clk) begin
-        if (reset) begin
+        if (rst) begin
             eth.rstn        <= 0;
             eth.tx_d        <= '0;
             eth.tx_en       <= 0;
@@ -521,7 +521,7 @@ module ethernet_udp_transmit #(
             mac_busy        <= 0;
             padding_nibbles <= '0;
             payload_nibbles <= '0;
-            ready           <= 0;
+            rdy             <= 0;
             state           <= POWER_UP;
         end else begin
             // No longer need to reset
@@ -533,14 +533,14 @@ module ethernet_udp_transmit #(
                 i <= i + 1;
             end else begin
                 i     <= '0;
-                ready <= 1;
+                rdy   <= 1;
                 state <= READY;
             end
             // Send as soon as there is enough data in the FIFO
             READY: if (!fifo_rd_rst_busy &&
                     (flush || fifo_rd_data_count >= MIN_DATA_NIBBLES)) begin
                 // Construct the Ethernet header
-                mac_header.dest_mac   <= ip_info.dest_mac;
+                mac_header.dst_mac    <= ip_info.dst_mac;
                 mac_header.src_mac    <= ip_info.src_mac;
                 mac_header.ether_type <= ETHER_TYPE;
                 // Construct the IP header
@@ -555,12 +555,12 @@ module ethernet_udp_transmit #(
                 ip_header.protocol        <= IP_PROTOCOL;
                 ip_header.header_checksum <= '0; // Computed later
                 ip_header.src_ip          <= ip_info.src_ip;
-                ip_header.dest_ip         <= ip_info.dest_ip;
+                ip_header.dst_ip          <= ip_info.dst_ip;
                 // Construct the UDP header
-                udp_header.src_port  <= ip_info.src_port;
-                udp_header.dest_port <= ip_info.dest_port;
-                udp_header.length    <= '0; // Computed later
-                udp_header.checksum  <= '0; // Optional, left as 0
+                udp_header.src_port <= ip_info.src_port;
+                udp_header.dst_port <= ip_info.dst_port;
+                udp_header.length   <= '0; // Computed later
+                udp_header.checksum <= '0; // Optional, left as 0
                 // The CRC starts as all 1's
                 fcs <= 32'hFFFFFFFF;
                 // The number of nibbles to send in the payload
