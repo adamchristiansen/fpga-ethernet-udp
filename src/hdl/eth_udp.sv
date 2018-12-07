@@ -26,7 +26,7 @@ typedef struct packed {
     logic [47:0] dst_mac;
     logic [47:0] src_mac;
     logic [15:0] ether_type;
-} MACHeader;
+} MacHeader;
 
 /// According to RFC 791, an IP header has the following format
 ///
@@ -74,7 +74,7 @@ typedef struct packed {
     logic [15:0] header_checksum;
     logic [31:0] src_ip;
     logic [31:0] dst_ip;
-} IPHeader;
+} IpHeader;
 
 /// According to RFC 768, the UDP header has the following format
 ///
@@ -96,7 +96,7 @@ typedef struct packed {
     logic [15:0] dst_port;
     logic [15:0] length;
     logic [15:0] checksum;
-} UDPHeader;
+} UdpHeader;
 
 /// Holds the values needed to describe the source and destination of an IP
 /// packet.
@@ -113,7 +113,7 @@ typedef struct packed {
 /// # Mod Ports
 ///
 /// *   [in] is an input port.
-interface IPInfo;
+interface IIpInfo;
     logic [31:0] src_ip;
     logic [47:0] src_mac;
     logic [15:0] src_port;
@@ -149,7 +149,7 @@ endinterface
 ///
 /// *   [fwd] forwards the ports while preserving the port directions to
 ///     communicate with the PHY.
-interface EthernetPHY;
+interface IEthPhy;
     logic ref_clk;
     logic rstn;
     logic tx_clk;
@@ -269,9 +269,9 @@ module eth_udp_send #(
     output logic wr_full,
     // Ethernet
     input logic clk25,
-    EthernetPHY.fwd eth,
+    IEthPhy.fwd eth,
     input logic flush,
-    IPInfo.in ip_info,
+    IIpInfo.in ip_info,
     output logic mac_busy,
     output logic rdy);
 
@@ -488,9 +488,9 @@ module eth_udp_send #(
     int unsigned checksum_temp;
 
     // The headers that are to be sent
-    MACHeader mac_header;
-    IPHeader ip_header;
-    UDPHeader udp_header;
+    MacHeader mac_header;
+    IpHeader ip_header;
+    UdpHeader udp_header;
 
     // The frame check (CRC) sequence for the Ethernet packet
     logic [31:0] fcs;
