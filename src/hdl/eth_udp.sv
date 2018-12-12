@@ -251,8 +251,8 @@ endinterface
 /// *   [mac_busy] indicates that packet is currently being sent. Note that the
 ///     queue can still be written to when this is asserted. When this signal
 ///     falls a packet has finished sending.
-/// *   [ready] indicates that the module is powered up and ready to
-///     communicate with the PHY when asserted high.
+/// *   [rdy] indicates that the module is powered up and ready to communicate
+///     with the PHY when asserted high.
 module eth_udp_send #(
     parameter int unsigned CLK_RATIO = 0,
     parameter int unsigned MAX_DATA_BYTES = 548,
